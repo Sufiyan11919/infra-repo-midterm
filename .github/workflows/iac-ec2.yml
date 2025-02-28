@@ -1,0 +1,123 @@
+name: Infra as Code: EC2 Docker Compose Test
+
+on:
+  push:
+    branches: [ "main" ]  # or whichever branches you want to trigger on
+
+jobs:
+  deploy-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (optional - only needed if you want local code)
+        uses: actions/checkout@v3
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+
+      - name: Launch EC2 instance
+        id: launch_ec2
+        run: |
+          # 1) Create a key pair on the fly (or you can use an existing one). 
+          #    Storing it in a file so we can SSH later:
+          KEY_PAIR_NAME="github-actions-key-$$"
+          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
+          chmod 400 ec2-key.pem
+
+          # 2) Spin up an EC2 instance. (Example: Ubuntu 22.04 AMI in us-east-1)
+          #    You can find a specific AMI ID by searching the AWS console or using AWS CLI filters.
+          AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
+          INSTANCE_TYPE="t2.micro"
+
+          # Passing user-data to install Docker, Git, and Docker Compose right away
+          # and to allow "ubuntu" user to run Docker without sudo.
+          USER_DATA="#!/bin/bash
+          sudo apt-get update -y
+          sudo apt-get install -y docker.io docker-compose git
+          sudo usermod -aG docker ubuntu
+          # Make sure Docker starts
+          sudo systemctl enable docker
+          sudo systemctl start docker
+          "
+
+          CREATE_OUTPUT=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "$KEY_PAIR_NAME" \
+            --user-data "$USER_DATA" \
+            --security-group-ids "default" \
+            --count 1)
+          
+          # 3) Grab the instance ID
+          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
+          echo "Instance ID: $INSTANCE_ID"
+
+          # 4) Wait until instance is in 'running' state
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          echo "Instance $INSTANCE_ID is now running."
+
+          # 5) Grab the public IP
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          
+          echo "Public IP: $PUBLIC_IP"
+
+          # 6) Set outputs so we can use them later in workflow steps
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=public_ip::$PUBLIC_IP"
+          echo "::set-output name=key_pair_name::$KEY_PAIR_NAME"
+
+      - name: Wait a bit for SSH to be ready
+        run: sleep 30
+
+      - name: SSH into the instance and run docker-compose
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.launch_ec2.outputs.public_ip }}
+          username: ubuntu
+          key: ec2-key.pem
+          script: |
+            # Clone your repo
+            git clone https://github.com/YourUsername/YourRepo.git
+            cd YourRepo
+
+            # If your docker-compose.yml is at the root or in a folder, adjust paths as needed.
+            # Compose up in detached mode
+            docker compose up -d
+
+            # Optionally, you can check container logs or ensure containers are running
+            docker ps
+
+      - name: Test with cURL
+        id: test_app
+        run: |
+          EC2_IP="${{ steps.launch_ec2.outputs.public_ip }}"
+          
+          echo "Waiting a few more seconds for backend to be up..."
+          sleep 20
+
+          # Example test: Insert a book
+          echo "Adding a test book..."
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{"title":"Test Book","description":"From GitHub Actions","price":9.99,"cover":"https://via.placeholder.com/150"}' \
+            http://$EC2_IP:8800/books
+
+          echo "Fetching all books..."
+          curl http://$EC2_IP:8800/books
+
+      - name: Terminate EC2 instance
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
+          KEY_PAIR_NAME="${{ steps.launch_ec2.outputs.key_pair_name }}"
+
+          echo "Terminating EC2 instance..."
+          aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+          aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+          echo "EC2 instance terminated."
+
+          echo "Deleting temporary key pair..."
+          aws ec2 delete-key-pair --key-name "$KEY_PAIR_NAME"
