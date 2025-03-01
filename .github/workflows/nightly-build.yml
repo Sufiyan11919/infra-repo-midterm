@@ -68,7 +68,6 @@ jobs:
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          # Use a valid Ubuntu 22.04 AMI in us-east-1; update as necessary.
           AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0703d19b09816257b"
@@ -105,9 +104,9 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 9) Wait for SSH to be ready (increased wait time)
+      # 9) Wait for SSH to be ready (increased wait time to 120 seconds)
       - name: Wait for SSH
-        run: sleep 60
+        run: sleep 120
 
       # 9.5) Debug: List key file and check its size
       - name: Check EC2 Key File
@@ -115,7 +114,7 @@ jobs:
           ls -l ec2-key.pem
           wc -c ec2-key.pem
 
-      # 10) Read the private key content and set as output using heredoc to support multiline
+      # 10) Read the private key content and set as output using heredoc for multiline
       - name: Read EC2 Private Key
         id: read_key
         run: |
