@@ -71,7 +71,7 @@ jobs:
           # Update the AMI_ID to a valid Ubuntu Jammy 22.04 image in us-east-1
           AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual security group ID
+          SECURITY_GROUP_ID="sg-0703d19b09816257b"
 
           USER_DATA="#!/bin/bash
           apt-get update -y
