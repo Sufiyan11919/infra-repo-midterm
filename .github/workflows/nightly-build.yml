@@ -10,23 +10,23 @@ jobs:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
       ECR_REPO_NAME: my-app
-      IMAGE_TAG: latest
+      IMAGE_TAG: latest 
 
     steps:
       # 1) Check out the code
       - name: Checkout
         uses: actions/checkout@v3
 
-      # 2) Configure AWS Credentials using GitHub Secrets (with session token)
+      # 2) Configure AWS Credentials (using session token)
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Log in to Amazon ECR
+      # 3) Log in to ECR
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
@@ -34,29 +34,35 @@ jobs:
 
       # 4) Build the Docker image
       - name: Build Docker Image
-        run: docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
+        run: |
+          docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
 
       # 5) Tag the image for ECR
       - name: Tag Image for ECR
-        run: docker tag $ECR_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+        run: |
+          docker tag $ECR_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
 
       # 6) Push the image to ECR
       - name: Push Image to ECR
-        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+        run: |
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
 
       # 7) Launch a temporary EC2 instance
       - name: Launch EC2 instance
         id: launch_ec2
         run: |
+          # Create a temporary key pair
           KEY_PAIR_NAME="github-actions-key-$$"
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" \
             --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
+          # Define instance details
           AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  
 
+          # User data: install Docker, Docker Compose, Git, AWS CLI, and log in to ECR
           USER_DATA="#!/bin/bash
           apt-get update -y
           apt-get install -y docker.io docker-compose git awscli
@@ -78,16 +84,19 @@ jobs:
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
 
+          # Wait until the instance is running
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
 
+          # Grab the public IP
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
 
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-          echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
+          # Set outputs for later steps
+          echo "::set-output name=instance_id::$INSTANCE_ID"
+          echo "::set-output name=public_ip::$PUBLIC_IP"
+          echo "::set-output name=key_pair_name::$KEY_PAIR_NAME"
 
       # 8) Wait for SSH to be ready
       - name: Wait for SSH
@@ -102,8 +111,10 @@ jobs:
           username: ubuntu
           key: ec2-key.pem
           script: |
-            git clone https://github.com/<YOUR-GITHUB-USERNAME>/<YOUR-REPO>.git app
+            # Clone your repository (adjust the URL as needed)
+            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git
             cd app
+            # Start containers using docker-compose
             docker compose up -d
             docker ps
 
@@ -122,14 +133,14 @@ jobs:
           echo "Fetching all records..."
           curl http://$EC2_IP:8800/books
 
-      # 11) Remove the ECR image if tests fail
+      # 11) If tests fail, remove the ECR image
       - name: Remove ECR image if tests fail
         if: failure()
         run: |
           echo "Tests failed! Removing image from ECR..."
           aws ecr batch-delete-image --repository-name $ECR_REPO_NAME --image-ids imageTag=$IMAGE_TAG
 
-      # 12) Terminate the EC2 instance and delete the temporary key pair
+      # 12) terminate the EC2 instance and delete the temporary key pair
       - name: Terminate EC2 instance
         if: always()
         run: |
