@@ -122,7 +122,7 @@ jobs:
           cat ec2-key.pem >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-            # 11) SSH into the instance and deploy with Docker Compose (using sudo for docker commands)
+      # 11) SSH into the instance and verify installations before deployment
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
@@ -148,19 +148,27 @@ jobs:
             fi
 
             echo "All dependencies are installed. Proceeding with deployment..."
+
+            # Authenticate with ECR again to ensure credentials are present
+            echo "Logging in to Amazon ECR..."
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
 
             # Use the correct Docker Compose syntax
             if command -v docker-compose &> /dev/null; then
               echo "Using docker-compose command..."
+              sudo docker-compose pull  # Ensure images are pulled before running
               sudo docker-compose up -d
             else
               echo "Using docker compose command..."
+              sudo docker compose pull  # Ensure images are pulled before running
               sudo docker compose up -d
             fi
 
             sudo docker ps
+
 
 
       # 12) Test the running application
