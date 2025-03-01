@@ -1,0 +1,28 @@
+name: "Test AWS Credentials"
+
+on:
+  workflow_dispatch:  # Allows manual trigger
+
+jobs:
+  test-aws:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Check out the repository (optional, but a best practice)
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # 2️⃣ Configure AWS Credentials using GitHub Secrets
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}  # Required if using STS
+          aws-region: us-east-1  # Hardcoded since you always use us-east-1
+
+      # 3️⃣ Verify AWS Identity (STS Check)
+      - name: Test AWS Credentials
+        run: |
+          echo "Checking AWS credentials..."
+          aws sts get-caller-identity
