@@ -1,46 +1,83 @@
-name: "Infra as Code: EC2 Docker Compose Test"
+name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
 
 on:
   push:
-    branches: [ "main" ]  # or whichever branches you want to trigger on
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-  deploy-and-test:
+  build-push-test:
     runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: 120717612929
+      ECR_REPO_NAME: my-app
+      # You can use a static tag like "latest" or something dynamic like the Git SHA:
+      IMAGE_TAG: latest
+      # For example: IMAGE_TAG: ${{ github.sha }}  
+
     steps:
-      - name: Checkout Code (optional - only needed if you want local code)
+      # 1) Check out the code
+      - name: Checkout
         uses: actions/checkout@v3
-      
+
+      # 2) Configure AWS Credentials
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
+      # 3) Log in to ECR
+      - name: Log in to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      # 4) Build the Docker image
+      - name: Build Docker Image
+        run: |
+          # Make sure Dockerfile is in the root or adjust path accordingly
+          docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
+
+      # 5) Tag the image for ECR
+      - name: Tag Image for ECR
+        run: |
+          docker tag $ECR_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+
+      # 6) Push the image to ECR
+      - name: Push Image to ECR
+        run: |
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+
+      # 7) Launch a temporary EC2 instance
       - name: Launch EC2 instance
         id: launch_ec2
         run: |
-          # 1) Create a key pair on the fly (or you can use an existing one). 
-          #    Storing it in a file so we can SSH later:
+          # Create a temporary key pair
           KEY_PAIR_NAME="github-actions-key-$$"
-          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
+          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" \
+            --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          # 2) Spin up an EC2 instance. (Example: Ubuntu 22.04 AMI in us-east-1)
-          #    You can find a specific AMI ID by searching the AWS console or using AWS CLI filters.
-          AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
+          # AMI: Ubuntu 22.04 in us-east-1
+          AMI_ID="ami-0851b76e8b1bce90b"
           INSTANCE_TYPE="t2.micro"
 
-          # Passing user-data to install Docker, Git, and Docker Compose right away
-          # and to allow "ubuntu" user to run Docker without sudo.
+          # Security group must allow inbound on 22 (SSH) and 8800 (app).
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # <-- CHANGE THIS TO YOUR SG
+
+          # User data: install Docker, Docker Compose, Git, AWS CLI, and log in to ECR
           USER_DATA="#!/bin/bash
-          sudo apt-get update -y
-          sudo apt-get install -y docker.io docker-compose git
-          sudo usermod -aG docker ubuntu
-          # Make sure Docker starts
-          sudo systemctl enable docker
-          sudo systemctl start docker
+          apt-get update -y
+          apt-get install -y docker.io docker-compose git awscli
+          usermod -aG docker ubuntu
+          systemctl enable docker
+          systemctl start docker
+          aws configure set default.region $AWS_REGION
+          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
           "
 
           CREATE_OUTPUT=$(aws ec2 run-instances \
@@ -48,76 +85,94 @@ jobs:
             --instance-type "$INSTANCE_TYPE" \
             --key-name "$KEY_PAIR_NAME" \
             --user-data "$USER_DATA" \
-            --security-group-ids "default" \
+            --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1)
-          
-          # 3) Grab the instance ID
+
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
 
-          # 4) Wait until instance is in 'running' state
+          # Wait until it's running
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
 
-          # 5) Grab the public IP
+          # Grab public IP
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text)
           echo "Public IP: $PUBLIC_IP"
 
-          # 6) Set outputs so we can use them later in workflow steps
+          # Set outputs for next steps
           echo "::set-output name=instance_id::$INSTANCE_ID"
           echo "::set-output name=public_ip::$PUBLIC_IP"
           echo "::set-output name=key_pair_name::$KEY_PAIR_NAME"
 
-      - name: Wait a bit for SSH to be ready
+      # 8) Wait for the instance SSH daemon to be ready
+      - name: Wait for SSH
         run: sleep 30
 
-      - name: SSH into the instance and run docker-compose
+      # 9) SSH into the instance and run Docker Compose
+      - name: Deploy & Start containers
+        id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ steps.launch_ec2.outputs.public_ip }}
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # Clone your repo
-            git clone https://github.com/YourUsername/YourRepo.git
-            cd YourRepo
+            # Example: If your docker-compose references the ECR image
+            # you may not even need to clone your repo. 
+            # But if you do need code, you can clone it:
+            git clone https://github.com/<YOUR-GITHUB-USERNAME>/<YOUR-REPO>.git app
+            cd app
 
-            # If your docker-compose.yml is at the root or in a folder, adjust paths as needed.
-            # Compose up in detached mode
+            # Adjust if your docker-compose is in a subfolder
+            # Ensure the docker-compose.yml references your ECR image:
+            # version: "3"
+            # services:
+            #   backend:
+            #     image: 120717612929.dkr.ecr.us-east-1.amazonaws.com/my-app:latest
+            #     ports:
+            #       - "8800:8800"
             docker compose up -d
 
-            # Optionally, you can check container logs or ensure containers are running
             docker ps
 
-      - name: Test with cURL
+      # 10) Test the running application
+      - name: Integration Test with cURL
         id: test_app
         run: |
+          set -e
           EC2_IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          
-          echo "Waiting a few more seconds for backend to be up..."
+          echo "Waiting a few more seconds for the app to be up..."
           sleep 20
 
-          # Example test: Insert a book
-          echo "Adding a test book..."
+          echo "Adding a test record..."
           curl -X POST -H "Content-Type: application/json" \
             -d '{"title":"Test Book","description":"From GitHub Actions","price":9.99,"cover":"https://via.placeholder.com/150"}' \
             http://$EC2_IP:8800/books
 
-          echo "Fetching all books..."
+          echo "Fetching all records..."
           curl http://$EC2_IP:8800/books
 
+      # 11) If tests fail, remove the ECR image
+      - name: Remove ECR image if tests fail
+        if: failure()
+        run: |
+          echo "Tests failed! Removing image from ECR..."
+          aws ecr batch-delete-image --repository-name $ECR_REPO_NAME \
+            --image-ids imageTag=$IMAGE_TAG
+
+      # 12) Always terminate EC2
       - name: Terminate EC2 instance
         if: always()
         run: |
           INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
           KEY_PAIR_NAME="${{ steps.launch_ec2.outputs.key_pair_name }}"
-
-          echo "Terminating EC2 instance..."
+          
+          echo "Terminating EC2 instance $INSTANCE_ID..."
           aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
           aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
           echo "EC2 instance terminated."
 
-          echo "Deleting temporary key pair..."
+          echo "Deleting temporary key pair $KEY_PAIR_NAME..."
           aws ec2 delete-key-pair --key-name "$KEY_PAIR_NAME"
