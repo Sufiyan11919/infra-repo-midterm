@@ -14,7 +14,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout the source repository (contains backend, frontend, docker-compose.yml)
+      # 1) Checkout the source repository (which contains backend, frontend, docker-compose.yml)
       - name: Checkout Source Repository
         uses: actions/checkout@v3
         with:
@@ -68,10 +68,10 @@ jobs:
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          # Update the AMI_ID to a valid Ubuntu Jammy 22.04 image in us-east-1
+          # Use a valid Ubuntu 22.04 AMI in us-east-1; update as necessary.
           AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0703d19b09816257b"
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
 
           USER_DATA="#!/bin/bash
           apt-get update -y
@@ -105,26 +105,38 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 9) Wait for SSH to be ready
+      # 9) Wait for SSH to be ready (increased wait time)
       - name: Wait for SSH
-        run: sleep 30
+        run: sleep 60
 
-      # 10) SSH into the instance and deploy with Docker Compose
+      # 9.5) Debug: List key file and check its size
+      - name: Check EC2 Key File
+        run: |
+          ls -l ec2-key.pem
+          wc -c ec2-key.pem
+
+      # 10) Read the private key content and set as output
+      - name: Read EC2 Private Key
+        id: read_key
+        run: |
+          echo "private_key=$(cat ec2-key.pem)" >> $GITHUB_OUTPUT
+
+      # 11) SSH into the instance and deploy with Docker Compose
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ steps.launch_ec2.outputs.public_ip }}
           username: ubuntu
-          key: ec2-key.pem
+          key: ${{ steps.read_key.outputs.private_key }}
           script: |
-            # Clone the source repository (if not already present on the instance)
+            # Clone the source repository (if not already present)
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
             docker compose up -d
             docker ps
 
-      # 11) Test the running application
+      # 12) Test the running application
       - name: Integration Test with cURL
         id: test_app
         run: |
@@ -139,7 +151,7 @@ jobs:
           echo "Fetching all records..."
           curl http://$EC2_IP:8800/books
 
-      # 12) Remove ECR images if tests fail
+      # 13) Remove ECR images if tests fail
       - name: Remove ECR images if tests fail
         if: failure()
         run: |
@@ -148,7 +160,7 @@ jobs:
           echo "Removing frontend image from ECR..."
           aws ecr batch-delete-image --repository-name $ECR_REPO_FRONTEND --image-ids imageTag=$IMAGE_TAG
 
-      # 13) Terminate the EC2 instance and delete the key pair
+      # 14) Terminate the EC2 instance and delete the key pair
       - name: Terminate EC2 instance
         if: always()
         run: |
