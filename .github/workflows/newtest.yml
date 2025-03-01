@@ -1,4 +1,4 @@
-name: "newtest"
+name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
 
 on:
   workflow_dispatch:
@@ -60,7 +60,7 @@ jobs:
       - name: Push Frontend Image to ECR
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-            # 8) Launch a temporary EC2 instance
+      # 8) Launch a temporary EC2 instance
       - name: Launch EC2 instance
         id: launch_ec2
         run: |
@@ -74,24 +74,11 @@ jobs:
 
           USER_DATA="#!/bin/bash
           apt-get update -y
-          apt-get install -y docker.io docker-compose git awscli jq
+          apt-get install -y docker.io docker-compose git awscli
           usermod -aG docker ubuntu
           systemctl enable docker
           systemctl start docker
-          
-          echo 'Setting AWS credentials...'
-          mkdir -p /home/ubuntu/.aws
-          echo '[default]' > /home/ubuntu/.aws/credentials
-          echo 'aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}' >> /home/ubuntu/.aws/credentials
-          echo 'aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}' >> /home/ubuntu/.aws/credentials
-          echo 'aws_session_token=${{ secrets.AWS_SESSION_TOKEN }}' >> /home/ubuntu/.aws/credentials
-          chown -R ubuntu:ubuntu /home/ubuntu/.aws
-
-          echo '[default]' > /home/ubuntu/.aws/config
-          echo 'region=$AWS_REGION' >> /home/ubuntu/.aws/config
-          chown -R ubuntu:ubuntu /home/ubuntu/.aws
-
-          echo 'Logging in to Amazon ECR...'
+          aws configure set default.region $AWS_REGION
           aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
           "
 
@@ -117,10 +104,9 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-
       # 9) Wait for SSH to be ready (increased wait time)
       - name: Wait for SSH
-        run: sleep 60
+        run: sleep 120
 
       # 9.5) Debug: List key file and check its size
       - name: Check EC2 Key File
@@ -136,7 +122,7 @@ jobs:
           cat ec2-key.pem >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-     # 11) SSH into the instance and verify installations before deployment
+        # 11) SSH into the instance and verify installations before deployment
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
@@ -167,7 +153,18 @@ jobs:
             fi
 
             echo "All dependencies are installed. Proceeding with deployment..."
+            
+            # Explicitly configure AWS credentials inside EC2 instance
+            echo "Configuring AWS credentials in EC2..."
+            mkdir -p /home/ubuntu/.aws
+            echo '[default]' > /home/ubuntu/.aws/credentials
+            echo 'aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}' >> /home/ubuntu/.aws/credentials
+            echo 'aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}' >> /home/ubuntu/.aws/credentials
+            echo 'aws_session_token=${{ secrets.AWS_SESSION_TOKEN }}' >> /home/ubuntu/.aws/credentials
+            echo 'region=${{ env.AWS_REGION }}' >> /home/ubuntu/.aws/config
+            chown -R ubuntu:ubuntu /home/ubuntu/.aws
 
+            # Authenticate with ECR again to ensure credentials are present
             echo "Logging in to Amazon ECR..."
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
