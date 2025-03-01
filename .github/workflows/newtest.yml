@@ -1,4 +1,4 @@
-name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
+name: "new"
 
 on:
   workflow_dispatch:
