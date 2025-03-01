@@ -1,9 +1,6 @@
 name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
@@ -17,13 +14,18 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Check out the code
-      - name: Checkout
+      # 1) Checkout the source repository (which has the Dockerfiles)
+      - name: Checkout Source Repository
         uses: actions/checkout@v3
+        with:
+          repository: Sufiyan11919/crud-react-node-mySQL-go
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       # 2) Configure AWS Credentials (using session token)
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -52,13 +54,11 @@ jobs:
 
       # 6) Push the Backend image to ECR
       - name: Push Backend Image to ECR
-        run: |
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
       # 7) Push the Frontend image to ECR
       - name: Push Frontend Image to ECR
-        run: |
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
       # 8) Launch a temporary EC2 instance
       - name: Launch EC2 instance
@@ -70,7 +70,7 @@ jobs:
 
           AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your SG ID
 
           USER_DATA="#!/bin/bash
           apt-get update -y
@@ -117,9 +117,8 @@ jobs:
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # Clone your repository (adjust URL as needed)
-            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
-            cd app
+            # Since we checked out the source repo, the repository root now contains docker-compose.yml.
+            # If your docker-compose.yml references the ECR images correctly, the following command will deploy them.
             docker compose up -d
             docker ps
 
