@@ -10,12 +10,9 @@ jobs:
   build-push-test:
     runs-on: ubuntu-latest
     env:
-      AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
       ECR_REPO_NAME: my-app
-      # You can use a static tag like "latest" or something dynamic like the Git SHA:
-      IMAGE_TAG: latest
-      # For example: IMAGE_TAG: ${{ github.sha }}  
+      IMAGE_TAG: latest  # You can change this to ${{ github.sha }} for dynamic tagging
 
     steps:
       # 1) Check out the code
@@ -29,29 +26,28 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
-          aws-region: us-east-1
+          aws-region: us-east-1  # Hardcoded
 
-      # 3) Log in to ECR
+      # 3) Log in to Amazon ECR
       - name: Log in to Amazon ECR
         run: |
-          aws ecr get-login-password --region $AWS_REGION \
-            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+          aws ecr get-login-password --region us-east-1 | \
+          docker login --username AWS --password-stdin 120717612929.dkr.ecr.us-east-1.amazonaws.com
 
       # 4) Build the Docker image
       - name: Build Docker Image
         run: |
-          # Make sure Dockerfile is in the root or adjust path accordingly
-          docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
+          docker build -t my-app:latest .
 
-      # 5) Tag the image for ECR
+      # 5) Tag Image for ECR
       - name: Tag Image for ECR
         run: |
-          docker tag $ECR_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+          docker tag my-app:latest 120717612929.dkr.ecr.us-east-1.amazonaws.com/my-app:latest
 
-      # 6) Push the image to ECR
+      # 6) Push Image to ECR
       - name: Push Image to ECR
         run: |
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+          docker push 120717612929.dkr.ecr.us-east-1.amazonaws.com/my-app:latest
 
       # 7) Launch a temporary EC2 instance
       - name: Launch EC2 instance
@@ -63,24 +59,23 @@ jobs:
             --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          # AMI: Ubuntu 22.04 in us-east-1
-          AMI_ID="ami-0851b76e8b1bce90b"
+          # Define instance details
+          AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
           INSTANCE_TYPE="t2.micro"
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # <-- Replace this with your security group ID
 
-          # Security group must allow inbound on 22 (SSH) and 8800 (app).
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # <-- CHANGE THIS TO YOUR SG
-
-          # User data: install Docker, Docker Compose, Git, AWS CLI, and log in to ECR
+          # User data script
           USER_DATA="#!/bin/bash
           apt-get update -y
           apt-get install -y docker.io docker-compose git awscli
           usermod -aG docker ubuntu
           systemctl enable docker
           systemctl start docker
-          aws configure set default.region $AWS_REGION
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+          aws configure set default.region us-east-1
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 120717612929.dkr.ecr.us-east-1.amazonaws.com
           "
 
+          # Launch EC2
           CREATE_OUTPUT=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type "$INSTANCE_TYPE" \
@@ -96,13 +91,13 @@ jobs:
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
 
-          # Grab public IP
+          # Get Public IP
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" \
             --output text)
           echo "Public IP: $PUBLIC_IP"
 
-          # Set outputs for next steps
+          # Set outputs
           echo "::set-output name=instance_id::$INSTANCE_ID"
           echo "::set-output name=public_ip::$PUBLIC_IP"
           echo "::set-output name=key_pair_name::$KEY_PAIR_NAME"
@@ -111,40 +106,37 @@ jobs:
       - name: Wait for SSH
         run: sleep 30
 
-      # 9) SSH into the instance and run Docker Compose
-      - name: Deploy & Start containers
-        id: ssh_deploy
+      # 9) SSH into the instance and deploy with Docker Compose
+      - name: Deploy & Start containers using Docker Compose
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ steps.launch_ec2.outputs.public_ip }}
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # Example: If your docker-compose references the ECR image
-            # you may not even need to clone your repo. 
-            # But if you do need code, you can clone it:
+            # Clone the GitHub repository
             git clone https://github.com/<YOUR-GITHUB-USERNAME>/<YOUR-REPO>.git app
             cd app
 
-            # Adjust if your docker-compose is in a subfolder
-            # Ensure the docker-compose.yml references your ECR image:
-            # version: "3"
+            # Ensure the docker-compose.yml references the ECR image:
             # services:
             #   backend:
             #     image: 120717612929.dkr.ecr.us-east-1.amazonaws.com/my-app:latest
             #     ports:
             #       - "8800:8800"
+
+            # Start services with Docker Compose
             docker compose up -d
 
+            # Show running containers
             docker ps
 
       # 10) Test the running application
       - name: Integration Test with cURL
         id: test_app
         run: |
-          set -e
           EC2_IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting a few more seconds for the app to be up..."
+          echo "Waiting for the app to start..."
           sleep 20
 
           echo "Adding a test record..."
@@ -160,8 +152,7 @@ jobs:
         if: failure()
         run: |
           echo "Tests failed! Removing image from ECR..."
-          aws ecr batch-delete-image --repository-name $ECR_REPO_NAME \
-            --image-ids imageTag=$IMAGE_TAG
+          aws ecr batch-delete-image --repository-name my-app --image-ids imageTag=latest
 
       # 12) Always terminate EC2
       - name: Terminate EC2 instance
