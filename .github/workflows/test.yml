@@ -29,9 +29,22 @@ jobs:
           echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}**********"
           echo "AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:0:4}**********"
 
-      # 4️⃣ Test AWS Credentials (Confirm Authentication)
+      # 4️⃣ Write Credentials to a File
+      - name: Write AWS Credentials to File
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" > credentials.txt
+          echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> credentials.txt
+          echo "AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}" >> credentials.txt
+
+      # 5️⃣ Upload the File as an Artifact
+      - name: Upload AWS Credentials File
+        uses: actions/upload-artifact@v3
+        with:
+          name: aws-credentials
+          path: credentials.txt
+
+      # 6️⃣ Test AWS Credentials (Confirm Authentication)
       - name: Test AWS Authentication
         run: |
           echo "🛠 Running AWS STS GetCallerIdentity..."
           aws sts get-caller-identity
-
