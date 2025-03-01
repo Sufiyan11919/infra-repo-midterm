@@ -115,11 +115,13 @@ jobs:
           ls -l ec2-key.pem
           wc -c ec2-key.pem
 
-      # 10) Read the private key content and set as output
+      # 10) Read the private key content and set as output using heredoc to support multiline
       - name: Read EC2 Private Key
         id: read_key
         run: |
-          echo "private_key=$(cat ec2-key.pem)" >> $GITHUB_OUTPUT
+          echo "private_key<<EOF" >> $GITHUB_OUTPUT
+          cat ec2-key.pem >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       # 11) SSH into the instance and deploy with Docker Compose
       - name: Deploy & Start containers
@@ -130,7 +132,6 @@ jobs:
           username: ubuntu
           key: ${{ steps.read_key.outputs.private_key }}
           script: |
-            # Clone the source repository (if not already present)
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
             docker compose up -d
