@@ -122,7 +122,7 @@ jobs:
           cat ec2-key.pem >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # 11) SSH into the instance and deploy with Docker Compose (using sudo for docker commands)
+      # 11) SSH into the instance and verify installations before deployment
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
@@ -131,6 +131,23 @@ jobs:
           username: ubuntu
           key: ${{ steps.read_key.outputs.private_key }}
           script: |
+            echo "Verifying Docker and Git installations..."
+            if ! command -v docker &> /dev/null; then
+              echo "Error: Docker is not installed. Exiting..."
+              exit 1
+            fi
+
+            if ! command -v git &> /dev/null; then
+              echo "Error: Git is not installed. Exiting..."
+              exit 1
+            fi
+
+            if ! command -v docker-compose &> /dev/null; then
+              echo "Error: Docker Compose is not installed. Exiting..."
+              exit 1
+            fi
+
+            echo "All dependencies are installed. Proceeding with deployment..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
             sudo docker compose up -d
