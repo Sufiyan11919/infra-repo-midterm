@@ -1,4 +1,4 @@
-name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
+name: "newtest"
 
 on:
   workflow_dispatch:
@@ -120,7 +120,7 @@ jobs:
 
       # 9) Wait for SSH to be ready (increased wait time)
       - name: Wait for SSH
-        run: sleep 30
+        run: sleep 60
 
       # 9.5) Debug: List key file and check its size
       - name: Check EC2 Key File
