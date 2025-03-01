@@ -1,6 +1,9 @@
 name: "Build, Push to ECR, Deploy on EC2, Test, Cleanup"
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
@@ -9,8 +12,9 @@ jobs:
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
-      ECR_REPO_NAME: my-app
-      IMAGE_TAG: latest 
+      ECR_REPO_BACKEND: my-app-backend
+      ECR_REPO_FRONTEND: my-app-frontend
+      IMAGE_TAG: latest
 
     steps:
       # 1) Check out the code
@@ -19,50 +23,55 @@ jobs:
 
       # 2) Configure AWS Credentials (using session token)
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Log in to ECR
+      # 3) Log in to Amazon ECR
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
             | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      # 4) Build the Docker image
-      - name: Build Docker Image
+      # 4) Build the Backend Docker image
+      - name: Build Backend Docker Image
         run: |
-          docker build -t $ECR_REPO_NAME:$IMAGE_TAG .
+          cd backend
+          docker build -t $ECR_REPO_BACKEND:$IMAGE_TAG .
+          docker tag $ECR_REPO_BACKEND:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      # 5) Tag the image for ECR
-      - name: Tag Image for ECR
+      # 5) Build the Frontend Docker image
+      - name: Build Frontend Docker Image
         run: |
-          docker tag $ECR_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+          cd frontend
+          docker build -t $ECR_REPO_FRONTEND:$IMAGE_TAG .
+          docker tag $ECR_REPO_FRONTEND:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 6) Push the image to ECR
-      - name: Push Image to ECR
+      # 6) Push the Backend image to ECR
+      - name: Push Backend Image to ECR
         run: |
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      # 7) Launch a temporary EC2 instance
+      # 7) Push the Frontend image to ECR
+      - name: Push Frontend Image to ECR
+        run: |
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+
+      # 8) Launch a temporary EC2 instance
       - name: Launch EC2 instance
         id: launch_ec2
         run: |
-          # Create a temporary key pair
           KEY_PAIR_NAME="github-actions-key-$$"
-          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" \
-            --query "KeyMaterial" --output text > ec2-key.pem
+          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          # Define instance details
           AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
 
-          # User data: install Docker, Docker Compose, Git, AWS CLI, and log in to ECR
           USER_DATA="#!/bin/bash
           apt-get update -y
           apt-get install -y docker.io docker-compose git awscli
@@ -84,25 +93,22 @@ jobs:
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
 
-          # Wait until the instance is running
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
 
-          # Grab the public IP
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
 
-          # Set outputs for later steps
-          echo "::set-output name=instance_id::$INSTANCE_ID"
-          echo "::set-output name=public_ip::$PUBLIC_IP"
-          echo "::set-output name=key_pair_name::$KEY_PAIR_NAME"
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 8) Wait for SSH to be ready
+      # 9) Wait for SSH to be ready
       - name: Wait for SSH
         run: sleep 30
 
-      # 9) SSH into the instance and deploy with Docker Compose
+      # 10) SSH into the instance and deploy with Docker Compose
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
@@ -111,14 +117,13 @@ jobs:
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # Clone your repository (adjust the URL as needed)
-            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git
+            # Clone your repository (adjust URL as needed)
+            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
-            # Start containers using docker-compose
             docker compose up -d
             docker ps
 
-      # 10) Test the running application
+      # 11) Test the running application
       - name: Integration Test with cURL
         id: test_app
         run: |
@@ -133,14 +138,16 @@ jobs:
           echo "Fetching all records..."
           curl http://$EC2_IP:8800/books
 
-      # 11) If tests fail, remove the ECR image
-      - name: Remove ECR image if tests fail
+      # 12) Remove ECR images if tests fail
+      - name: Remove ECR images if tests fail
         if: failure()
         run: |
-          echo "Tests failed! Removing image from ECR..."
-          aws ecr batch-delete-image --repository-name $ECR_REPO_NAME --image-ids imageTag=$IMAGE_TAG
+          echo "Tests failed! Removing backend image from ECR..."
+          aws ecr batch-delete-image --repository-name $ECR_REPO_BACKEND --image-ids imageTag=$IMAGE_TAG
+          echo "Removing frontend image from ECR..."
+          aws ecr batch-delete-image --repository-name $ECR_REPO_FRONTEND --image-ids imageTag=$IMAGE_TAG
 
-      # 12) terminate the EC2 instance and delete the temporary key pair
+      # 13) Terminate the EC2 instance and delete the key pair
       - name: Terminate EC2 instance
         if: always()
         run: |
