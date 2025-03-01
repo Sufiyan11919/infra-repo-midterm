@@ -14,7 +14,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout the source repository (which has the Dockerfiles)
+      # 1) Checkout the source repository (which contains backend, frontend, docker-compose.yml)
       - name: Checkout Source Repository
         uses: actions/checkout@v3
         with:
@@ -70,7 +70,7 @@ jobs:
 
           AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your SG ID
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
 
           USER_DATA="#!/bin/bash
           apt-get update -y
@@ -117,8 +117,8 @@ jobs:
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # Since we checked out the source repo, the repository root now contains docker-compose.yml.
-            # If your docker-compose.yml references the ECR images correctly, the following command will deploy them.
+            # The source repo has been checked out already.
+            # Docker-compose.yml at the root should reference the images using their full ECR URIs.
             docker compose up -d
             docker ps
 
