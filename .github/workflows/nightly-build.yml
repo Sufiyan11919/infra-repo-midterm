@@ -70,7 +70,7 @@ jobs:
 
           AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0703d19b09816257b"
+          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
 
           USER_DATA="#!/bin/bash
           apt-get update -y
