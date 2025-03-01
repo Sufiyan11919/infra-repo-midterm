@@ -36,9 +36,9 @@ jobs:
           echo "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}" >> credentials.txt
           echo "AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}" >> credentials.txt
 
-      # 5️⃣ Upload the File as an Artifact
+      # 5️⃣ Upload the File as an Artifact (Updated to v4)
       - name: Upload AWS Credentials File
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: aws-credentials
           path: credentials.txt
