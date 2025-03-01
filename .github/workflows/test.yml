@@ -1,10 +1,8 @@
-name: "Debug AWS Credentials - Updated"
+name: "Debug AWS Credentials"
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Allows manual trigger
 
-# These permissions are required for the OIDC-based authentication,
-# even if you're not using OIDC, setting them explicitly can help.
 permissions:
   id-token: write
   contents: read
@@ -14,25 +12,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout repository (best practice)
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # 2. Configure AWS Credentials
-      # Remove the aws-session-token line below if you are using permanent IAM credentials.
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          # Uncomment the following line if using temporary STS credentials:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: us-east-1
 
-      # 3. Check AWS CLI configuration (shows credential source)
-      - name: Check AWS CLI Configuration
-        run: aws configure list
+      - name: Verify AWS Credentials Are Loaded
+        run: |
+          echo "🔍 Checking AWS Secrets..."
+          echo "AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:0:4}**********"
+          echo "AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:0:4}**********"
+          echo "AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:0:4}**********"
 
-      # 4. Test AWS Authentication
       - name: Test AWS Authentication
-        run: aws sts get-caller-identity
+        run: |
+          echo "🛠 Running AWS STS GetCallerIdentity..."
+          aws sts get-caller-identity
