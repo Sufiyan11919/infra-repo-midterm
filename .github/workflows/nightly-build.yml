@@ -70,7 +70,7 @@ jobs:
 
           AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
+          SECURITY_GROUP_ID="sg-0703d19b09816257b"
 
           USER_DATA="#!/bin/bash
           apt-get update -y
@@ -104,7 +104,7 @@ jobs:
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 9) Wait for SSH to be ready (increased wait time to 120 seconds)
+      # 9) Wait for SSH to be ready (increased wait time)
       - name: Wait for SSH
         run: sleep 120
 
