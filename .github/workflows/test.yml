@@ -11,6 +11,6 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Print Masked Secret
-        run: echo "MY_SECRET: ${MY_SECRET:0:4}********"
+        run: 'echo "MY_SECRET: ${MY_SECRET:0:4}********"'
         env:
           MY_SECRET: ${{ secrets.MY_SECRET }}
