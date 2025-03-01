@@ -122,7 +122,7 @@ jobs:
           cat ec2-key.pem >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-        # 11) SSH into the instance and verify installations before deployment
+             # 11) SSH into the instance and verify installations before deployment
       - name: Deploy & Start containers
         id: ssh_deploy
         uses: appleboy/ssh-action@v0.1.8
@@ -147,6 +147,13 @@ jobs:
               exit 1
             fi
 
+            echo "Configuring AWS credentials in EC2..."
+            export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
+            export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            export AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}"
+            export AWS_REGION="${{ env.AWS_REGION }}"
+
+            # Verify AWS credentials
             if ! aws sts get-caller-identity &> /dev/null; then
               echo "Error: AWS credentials are not configured properly. Exiting..."
               exit 1
@@ -154,17 +161,7 @@ jobs:
 
             echo "All dependencies are installed. Proceeding with deployment..."
             
-            # Explicitly configure AWS credentials inside EC2 instance
-            echo "Configuring AWS credentials in EC2..."
-            mkdir -p /home/ubuntu/.aws
-            echo '[default]' > /home/ubuntu/.aws/credentials
-            echo 'aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}' >> /home/ubuntu/.aws/credentials
-            echo 'aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}' >> /home/ubuntu/.aws/credentials
-            echo 'aws_session_token=${{ secrets.AWS_SESSION_TOKEN }}' >> /home/ubuntu/.aws/credentials
-            echo 'region=${{ env.AWS_REGION }}' >> /home/ubuntu/.aws/config
-            chown -R ubuntu:ubuntu /home/ubuntu/.aws
-
-            # Authenticate with ECR again to ensure credentials are present
+            # Authenticate with ECR again
             echo "Logging in to Amazon ECR..."
             aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
@@ -183,6 +180,7 @@ jobs:
             fi
 
             sudo docker ps
+
 
 
 
