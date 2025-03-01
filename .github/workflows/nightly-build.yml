@@ -14,7 +14,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout the source repository (which contains backend, frontend, docker-compose.yml)
+      # 1) Checkout the source repository (contains backend, frontend, docker-compose.yml)
       - name: Checkout Source Repository
         uses: actions/checkout@v3
         with:
@@ -68,9 +68,10 @@ jobs:
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          AMI_ID="ami-0851b76e8b1bce90b"  # Ubuntu 22.04 in us-east-1
+          # Update the AMI_ID to a valid Ubuntu Jammy 22.04 image in us-east-1
+          AMI_ID="ami-008d819eefb4b5ee4"
           INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual SG ID
+          SECURITY_GROUP_ID="sg-0123456789abcdef0"  # Replace with your actual security group ID
 
           USER_DATA="#!/bin/bash
           apt-get update -y
@@ -117,8 +118,9 @@ jobs:
           username: ubuntu
           key: ec2-key.pem
           script: |
-            # The source repo has been checked out already.
-            # Docker-compose.yml at the root should reference the images using their full ECR URIs.
+            # Clone the source repository (if not already present on the instance)
+            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
+            cd app
             docker compose up -d
             docker ps
 
@@ -152,9 +154,13 @@ jobs:
         run: |
           INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
           KEY_PAIR_NAME="${{ steps.launch_ec2.outputs.key_pair_name }}"
-          echo "Terminating EC2 instance $INSTANCE_ID..."
-          aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
-          aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
-          echo "EC2 instance terminated."
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "No instance was launched; skipping termination."
+          else
+            echo "Terminating EC2 instance $INSTANCE_ID..."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+            echo "EC2 instance terminated."
+          fi
           echo "Deleting temporary key pair $KEY_PAIR_NAME..."
           aws ec2 delete-key-pair --key-name "$KEY_PAIR_NAME"
