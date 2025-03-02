@@ -1,4 +1,4 @@
-name: "newnewtest"
+name: "Cleanup"
 
 on:
   workflow_dispatch:
@@ -168,10 +168,10 @@ jobs:
             cd app
 
             echo "Using docker-compose command..."
-            sudo /usr/local/bin/docker-compose pull  # Ensure images are pulled before running
-            sudo /usr/local/bin/docker-compose up -d
+            /usr/local/bin/docker-compose pull  # Ensure images are pulled before running
+            /usr/local/bin/docker-compose up -d
 
-            sudo docker ps
+            docker ps
 
       # 12) Test the running application
       - name: Integration Test with cURL
