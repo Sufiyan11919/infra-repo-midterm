@@ -16,7 +16,7 @@ jobs:
     steps:
       # 1) Checkout the source repository (which contains backend, frontend, docker-compose.yml)
       - name: Checkout Source Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v2
         with:
           repository: Sufiyan11919/crud-react-node-mySQL-go
           ref: main
@@ -60,7 +60,7 @@ jobs:
       - name: Push Frontend Image to ECR
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 8) Launch a temporary EC2 instance
+      # 8) Launch a temporary EC2 instance using Amazon Linux 2
       - name: Launch EC2 instance
         id: launch_ec2
         run: |
@@ -68,14 +68,15 @@ jobs:
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          AMI_ID="ami-008d819eefb4b5ee4"
+          # Update the AMI_ID to an Amazon Linux 2 AMI in us-east-1
+          AMI_ID="ami-0c2b8ca1dad447f8a"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
 
           USER_DATA="#!/bin/bash
-          apt-get update -y
-          apt-get install -y docker.io docker-compose git awscli
-          usermod -aG docker ubuntu
+          yum update -y
+          yum install -y docker git aws-cli docker-compose
+          usermod -a -G docker ec2-user
           systemctl enable docker
           systemctl start docker
           aws configure set default.region $AWS_REGION
@@ -128,7 +129,7 @@ jobs:
         uses: appleboy/ssh-action@v0.1.8
         with:
           host: ${{ steps.launch_ec2.outputs.public_ip }}
-          username: ubuntu
+          username: ec2-user
           key: ${{ steps.read_key.outputs.private_key }}
           script: |
             echo "Verifying Docker and Git installations..."
@@ -168,8 +169,6 @@ jobs:
             fi
 
             sudo docker ps
-
-
 
       # 12) Test the running application
       - name: Integration Test with cURL
