@@ -60,145 +60,60 @@ jobs:
       - name: Push Frontend Image to ECR
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 8) Launch a temporary EC2 instance
-      - name: Launch EC2 instance
+      # Launch a temporary EC2 instance for smoke testing
+      - name: Launch Temporary EC2 for Smoke Test
         id: launch_ec2
         run: |
-          KEY_PAIR_NAME="github-actions-key-$$"
-          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ami-053a45fff0a704a47 \
+            --count 1 \
+            --instance-type t2.micro \
+            --key-name ec2TestInstanceKey \
+            --security-group-ids sg-06ed8968a7a3ec08f \
+            --subnet-id subnet-058dd85267834457a \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID  # Wait for the instance to start
+          sleep 10  # Allow additional time for instance setup
+
+      # Set up SSH key for EC2 access
+      - name: Set up SSH Key
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
           chmod 400 ec2-key.pem
 
-          AMI_ID="ami-008d819eefb4b5ee4"
-          INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
-
-          USER_DATA="#!/bin/bash
-          apt-get update -y
-          apt-get install -y docker.io docker-compose git awscli
-          usermod -aG docker ubuntu
-          systemctl enable docker
-          systemctl start docker
-          aws configure set default.region $AWS_REGION
-          aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-          "
-
-          CREATE_OUTPUT=$(aws ec2 run-instances \
-            --image-id "$AMI_ID" \
-            --instance-type "$INSTANCE_TYPE" \
-            --key-name "$KEY_PAIR_NAME" \
-            --user-data "$USER_DATA" \
-            --security-group-ids "$SECURITY_GROUP_ID" \
-            --count 1)
-
-          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
-          echo "Instance ID: $INSTANCE_ID"
-
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "Instance $INSTANCE_ID is now running."
-
-          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          echo "Public IP: $PUBLIC_IP"
-
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-          echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
-
-      # 9) Wait for SSH to be ready (increased wait time)
-      - name: Wait for SSH
-        run: sleep 120
-
-      # 9.5) Debug: List key file and check its size
-      - name: Check EC2 Key File
+      # Pull images onto the EC2 instance and run smoke tests
+      - name: Pull Images on Temporary EC2 and Run Smoke Tests
         run: |
-          ls -l ec2-key.pem
-          wc -c ec2-key.pem
+          # Get the public DNS of the instance
+          PUBLIC_DNS=$(aws ec2 describe-instances --instance-ids ${{ env.INSTANCE_ID }} \
+            --query 'Reservations[0].Instances[0].PublicDnsName' \
+            --output text)
+          echo "PUBLIC_DNS=$PUBLIC_DNS" >> $GITHUB_ENV
+          
+          # Copy test Docker Compose file to instance
+          scp -i ec2-key.pem -o StrictHostKeyChecking=no app/docker-compose-test.yml ec2-user@$PUBLIC_DNS:~/
+          
+          # SSH into the instance and run the tests
+          ssh -i ec2-key.pem -o StrictHostKeyChecking=no ec2-user@$PUBLIC_DNS << EOF
+            sudo yum install -y docker
+            sudo service docker start
+            sudo chkconfig docker on
+            sudo usermod -aG docker ec2-user
+            sudo curl -L https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m) -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            newgrp docker
+            docker --version
+            docker-compose version
 
-      # 10) Read the private key content and set as output using heredoc for multiline
-      - name: Read EC2 Private Key
-        id: read_key
-        run: |
-          echo "private_key<<EOF" >> $GITHUB_OUTPUT
-          cat ec2-key.pem >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            aws ecr get-login-password --region \$AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.\$AWS_REGION.amazonaws.com
+            docker-compose -f docker-compose-test.yml up -d
+            sleep 10
 
-             # 11) SSH into the instance and verify installations before deployment
-      - name: Deploy & Start containers
-        id: ssh_deploy
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ steps.launch_ec2.outputs.public_ip }}
-          username: ubuntu
-          key: ${{ steps.read_key.outputs.private_key }}
-          script: |
-            echo "Verifying Docker, Git, and AWS credentials..."
-            if ! command -v docker &> /dev/null; then
-              echo "Error: Docker is not installed. Exiting..."
-              exit 1
-            fi
+            curl -o /dev/null -s -w "%{http_code}\n" http://localhost:5173/ | grep -q 200 || exit 1
+          EOF
 
-            if ! command -v git &> /dev/null; then
-              echo "Error: Git is not installed. Exiting..."
-              exit 1
-            fi
-
-            if ! command -v aws &> /dev/null; then
-              echo "Error: AWS CLI is not installed. Exiting..."
-              exit 1
-            fi
-
-            echo "Configuring AWS credentials in EC2..."
-            export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
-            export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-            export AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}"
-            export AWS_REGION="${{ env.AWS_REGION }}"
-
-            # Verify AWS credentials
-            if ! aws sts get-caller-identity &> /dev/null; then
-              echo "Error: AWS credentials are not configured properly. Exiting..."
-              exit 1
-            fi
-
-            echo "All dependencies are installed. Proceeding with deployment..."
-            
-            # Authenticate with ECR again
-            echo "Logging in to Amazon ECR..."
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-
-            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
-            cd app
-
-            # Use the correct Docker Compose syntax
-            if command -v docker-compose &> /dev/null; then
-              echo "Using docker-compose command..."
-              sudo docker-compose pull  # Ensure images are pulled before running
-              sudo docker-compose up -d
-            else
-              echo "Using docker compose command..."
-              sudo docker compose pull  # Ensure images are pulled before running
-              sudo docker compose up -d
-            fi
-
-            sudo docker ps
-
-
-
-
-
-      # 12) Test the running application
-      - name: Integration Test with cURL
-        id: test_app
-        run: |
-          set -e
-          EC2_IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting a few more seconds for the app to be up..."
-          sleep 20
-          echo "Adding a test record..."
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{"title":"Test Book","description":"From GitHub Actions","price":9.99,"cover":"https://via.placeholder.com/150"}' \
-            http://$EC2_IP:8800/books
-          echo "Fetching all records..."
-          curl http://$EC2_IP:8800/books
 
       # 13) Remove ECR images if tests fail
       - name: Remove ECR images if tests fail
