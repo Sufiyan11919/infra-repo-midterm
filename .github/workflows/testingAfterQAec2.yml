@@ -16,16 +16,11 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1. Checkout source code (used later for building images)
+      # 1. Checkout the repository (for later builds)
       - name: Checkout Source
         uses: actions/checkout@v2
-        with:
-          repository: Sufiyan11919/crud-react-node-mySQL-go
-          ref: main
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
 
-      # 2. Configure AWS Credentials (needed for EC2 API calls)
+      # 2. Configure AWS credentials (for EC2 API calls)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -34,21 +29,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3. Launch an ephemeral EC2 instance (Amazon Linux 2) without ECR login
+      # 3. Launch an EC2 instance using a fixed pre-created key pair (here "my-key")
       - name: Launch EC2
         id: launch_ec2
         run: |
-          # Create a unique key pair and save the private key
-          KEY_PAIR_NAME="github-actions-key-$$"
-          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
-          chmod 400 ec2-key.pem
-
-          # Use official Amazon Linux 2 AMI for us-east-1
-          AMI_ID="ami-09e67e426f25ce0d7"
+          # Use your pre-created key pair name; here it is hard-coded as "my-key"
+          KEY_PAIR_NAME="my-key"
+          AMI_ID="ami-09e67e426f25ce0d7"  # Official Amazon Linux 2 AMI in us-east-1
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
 
-          # User data: install Docker & Git only
+          # User data: install Docker and Git
           USER_DATA="#!/bin/bash
           yum update -y
           yum install -y docker git
@@ -63,43 +54,31 @@ jobs:
             --user-data "$USER_DATA" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1)
-
+          
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
-
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
-
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
-
-          # Set outputs for later steps
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-          echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 4. Wait a bit to ensure SSH is ready
+      # 4. Wait for SSH to be ready
       - name: Wait for SSH
         run: sleep 60
 
-      # 5. Read out the private key using the new environment file method
-      - name: Read EC2 Key
-        id: read_key
+      # 5. Write the private key from the secret to a file and set permissions to 400
+      - name: Write SSH Key to File
         run: |
-          echo "private_key<<EOF" >> $GITHUB_ENV
-          cat ec2-key.pem >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+          chmod 400 ec2-key.pem
 
-      # 6. SSH into the EC2 instance: clone repo and run docker-compose.test.yml
-      - name: Run Test on Temp EC2
-        uses: appleboy/ssh-action@v0.1.8
-        id: test_on_ec2
-        with:
-          host: ${{ steps.launch_ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ env.private_key }}
-          script: |
+      # 6. Connect via SSH (using the key file) to the EC2 instance and run your test commands
+      - name: Run Test on Temp EC2 via SSH
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
             set -e
             echo "Cloning repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
@@ -110,10 +89,10 @@ jobs:
             echo "Containers started. Checking status and logs..."
             docker-compose -f docker-compose.test.yml ps
             docker-compose -f docker-compose.test.yml logs backend
+          EOF
 
-      # 7. Smoke test from the GitHub runner using cURL
+      # 7. Run smoke tests from the GitHub runner
       - name: Smoke Test with cURL
-        id: smoke_test
         run: |
           set -e
           IP="${{ steps.launch_ec2.outputs.public_ip }}"
@@ -131,44 +110,32 @@ jobs:
         if: success()
         run: |
           aws ecr get-login-password --region $AWS_REGION \
-            | docker login --username AWS \
-            --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      - name: Build Backend (GH Runner)
+      - name: Build and Push Backend
         if: success()
         run: |
           cd backend
           docker build -t my-backend-local:latest .
           docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      - name: Build Frontend (GH Runner)
+      - name: Build and Push Frontend
         if: success()
         run: |
           cd frontend
           docker build -t my-frontend-local:latest .
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
-
-      - name: Push Backend to ECR
-        if: success()
-        run: |
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
-
-      - name: Push Frontend to ECR
-        if: success()
-        run: |
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 9. Terminate the ephemeral EC2 instance and delete the temporary key pair
+      # 9. Terminate the EC2 instance
       - name: Terminate EC2
         if: always()
         run: |
           INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
-          KEY_PAIR_NAME="${{ steps.launch_ec2.outputs.key_pair_name }}"
           if [ -n "$INSTANCE_ID" ]; then
             echo "Terminating EC2 instance $INSTANCE_ID..."
             aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
             aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
             echo "Instance terminated."
           fi
-          echo "Deleting temporary key pair..."
-          aws ec2 delete-key-pair --key-name "$KEY_PAIR_NAME"
