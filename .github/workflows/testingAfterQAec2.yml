@@ -66,7 +66,7 @@ jobs:
       - name: Push Frontend
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 6️⃣ Launch an EC2 instance (User-Data Injecting AWS Credentials)
+      # 6️⃣ Launch an EC2 instance
       - name: Launch EC2
         id: launch_ec2
         run: |
@@ -75,40 +75,26 @@ jobs:
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
           KEY_PAIR_NAME="myTempKeyPair"
 
-          USER_DATA=$(cat <<EOF
-          #!/bin/bash
-          export AWS_REGION="us-east-1"
-          export AWS_ACCESS_KEY_ID="${{ secrets.AWS_ACCESS_KEY_ID }}"
-          export AWS_SECRET_ACCESS_KEY="${{ secrets.AWS_SECRET_ACCESS_KEY }}"
-          export AWS_SESSION_TOKEN="${{ secrets.AWS_SESSION_TOKEN }}"
-
-          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
-          EOF
-          )
-
-          CREATE_OUTPUT=$(aws ec2 run-instances \
+          INSTANCE_ID=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type "$INSTANCE_TYPE" \
             --key-name "$KEY_PAIR_NAME" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1 \
             --region us-east-1 \
-            --user-data "$USER_DATA")
+            --query "Instances[0].InstanceId" --output text)
 
-          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
-          echo "Instance ID: $INSTANCE_ID"
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
 
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region us-east-1
           echo "Instance $INSTANCE_ID is now running."
 
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" \
-            --output text \
-            --region us-east-1)
-          echo "Public IP: $PUBLIC_IP"
+            --output text --region us-east-1)
 
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_ENV
+          echo "Instance running at $PUBLIC_IP"
 
       # 7️⃣ Setup SSH Key
       - name: Setup SSH Key
@@ -119,44 +105,45 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 8️⃣ SSH into EC2, Pull Images, and Run Them
+      # 8️⃣ SSH into EC2, set AWS credentials, pull ECR images, and run tests
       - name: Deploy & Test
-        uses: appleboy/ssh-action@v0.1.8
-        with:
-          host: ${{ steps.launch_ec2.outputs.public_ip }}
-          username: ec2-user
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
+        run: |
+          ssh -i ec2-key.pem -o StrictHostKeyChecking=no ec2-user@${{ env.PUBLIC_IP }} << EOF
             set -e
-            echo "Logging into ECR on EC2..."
-            aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 
+            echo "Setting AWS credentials..."
+            export AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+            export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+            export AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}
+            export AWS_REGION="us-east-1"
+
+            echo "Logging into AWS ECR..."
+            aws ecr get-login-password --region \$AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.\$AWS_REGION.amazonaws.com
+
+            echo "Cloning the application repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
 
             echo "Pulling images from ECR..."
             docker-compose -f docker-compose.test.yml pull
 
-            echo "Starting environment..."
+            echo "Starting Docker environment..."
             docker-compose -f docker-compose.test.yml up -d
+            sleep 10
+            docker ps
 
-      # 9️⃣ Smoke Test
-      - name: Smoke Test with cURL
-        run: |
-          set -e
-          IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting 20s for containers to start..."
-          sleep 20
+            echo "Running smoke tests..."
+            curl -o /dev/null -s -w "%{http_code}\n" http://localhost:5173/ | grep -q 200 || exit 1
+            echo "✅ Test completed successfully for displaying frontend main page!"
 
-          echo "POST a new book..."
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
-            http://$IP:8800/books
+            curl -o /dev/null -s -w "%{http_code}\n" http://localhost:8800/ | grep -q 200 || exit 1
+            echo "✅ Test completed successfully for backend root!"
+          
+            curl -o /dev/null -s -w "%{http_code}\n" http://localhost:8800/books | grep -q 200 || exit 1
+            echo "✅ Test completed successfully for fetching books!"
+          EOF
 
-          echo "GET all books..."
-          curl http://$IP:8800/books
-
-      # 🔟 Remove ECR Images if Test Fails
+      # 9️⃣ Remove ECR images if test fails
       - name: Remove ECR Images on Failure
         if: failure()
         run: |
@@ -168,10 +155,6 @@ jobs:
       - name: Terminate EC2
         if: always()
         run: |
-          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
-          if [ -n "$INSTANCE_ID" ]; then
-            echo "Terminating EC2 instance $INSTANCE_ID..."
-            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region us-east-1
-            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID" --region us-east-1
-            echo "Instance terminated."
-          fi
+          aws ec2 terminate-instances --instance-ids ${{ env.INSTANCE_ID }} --region us-east-1
+          aws ec2 wait instance-terminated --instance-ids ${{ env.INSTANCE_ID }} --region us-east-1
+          echo "EC2 instance terminated."
