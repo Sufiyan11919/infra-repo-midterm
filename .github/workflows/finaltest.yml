@@ -108,7 +108,7 @@ jobs:
             cd app
             echo "Starting containers using docker-compose.test.yml..."
             docker-compose -f docker-compose.test.yml up -d
-EOF
+            EOF
 
       # 7. Run smoke tests on EC2 using localhost (container IP)
       - name: Smoke Test on EC2 (using localhost)
