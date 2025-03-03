@@ -123,13 +123,13 @@ jobs:
             set -e
             echo "Waiting 30s for the app to fully initialize..."
             sleep 30
-            echo "Sending POST request to http://localhost:8800/books..."
+            echo "Sending POST request to http://$EC2_IP:8800/books..."
             response=$(curl -X POST -H "Content-Type: application/json" -d '{
               "title": "New Book",
               "description": "This is a test book",
               "price": 10.99,
               "cover": "https://example.com/book-cover.jpg"
-            }' http://localhost:8800/books)
+            }' http://$EC2_IP:8800/books)
             echo "Response: $response"
             if [[ "$response" != *"Book has been created successfully!!!"* ]]; then
               echo "Smoke test failed: unexpected response"
