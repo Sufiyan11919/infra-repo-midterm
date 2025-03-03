@@ -2,12 +2,13 @@ name: "Nightly Build & Test"
 
 on:
   schedule:
-    - cron: "0 0 * * *"
+    - cron: "0 0 * * *"  # runs nightly at midnight UTC
   workflow_dispatch:
 
 jobs:
   build-push-test:
     runs-on: ubuntu-latest
+    
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
@@ -16,7 +17,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout source
+      # 1) Checkout your application code (repo has Dockerfiles, docker-compose.test.yml, etc.)
       - name: Checkout Source
         uses: actions/checkout@v2
         with:
@@ -25,7 +26,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # 2) AWS credentials
+      # 2) Configure AWS Credentials (for ECR and EC2)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -34,14 +35,14 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Login to ECR
+      # 3) Log in to Amazon ECR (to push images)
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
             | docker login --username AWS \
             --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      # 4) Build & Push Backend
+      # 4) Build & Push the Backend image
       - name: Build Backend
         run: |
           cd backend
@@ -51,7 +52,7 @@ jobs:
       - name: Push Backend
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      # 5) Build & Push Frontend
+      # 5) Build & Push the Frontend image
       - name: Build Frontend
         run: |
           cd frontend
@@ -61,37 +62,39 @@ jobs:
       - name: Push Frontend
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 6) Launch a temporary EC2 instance (using a pre-existing key pair)
+      # 6) Launch an EC2 instance using the existing key pair "myTempKeyPair"
       - name: Launch EC2
         id: launch_ec2
         run: |
           AMI_ID="ami-09940406aa41815f0"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
-          KEY_PAIR_NAME="myExistingKeyPair"  # <-- Put your real key pair name here
+          KEY_PAIR_NAME="myTempKeyPair"  # The name you used when importing your public key to AWS
 
           CREATE_OUTPUT=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type "$INSTANCE_TYPE" \
             --key-name "$KEY_PAIR_NAME" \
             --security-group-ids "$SECURITY_GROUP_ID" \
-            --count 1)
-          
+            --count 1 \
+            --region $AWS_REGION)
+
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
 
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID" --region $AWS_REGION
           echo "Instance $INSTANCE_ID is now running."
 
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+            --query "Reservations[0].Instances[0].PublicIpAddress" \
+            --output text \
+            --region $AWS_REGION)
           echo "Public IP: $PUBLIC_IP"
 
-          # Output for next steps
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
-      # 7) Setup Key from GitHub Secret
+      # 7) Write the private key from GitHub Secrets to ec2-key.pem
       - name: Setup SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
@@ -100,7 +103,7 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 8) Deploy & Test in Ephemeral EC2
+      # 8) SSH into the ephemeral EC2, pull images from ECR, run them
       - name: Deploy & Test
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -110,11 +113,11 @@ jobs:
             ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            # Clone your repo to get docker-compose.test.yml
+            # Clone your repo to get docker-compose.test.yml (which references the ECR images + a MySQL container)
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
 
-            # Docker login again on ephemeral EC2
+            # Docker login again on ephemeral EC2 (so we can pull from ECR)
             echo "Logging into ECR on ephemeral EC2..."
             aws ecr get-login-password --region us-east-1 \
               | docker login --username AWS \
@@ -126,7 +129,7 @@ jobs:
             echo "Starting ephemeral environment..."
             docker-compose -f docker-compose.test.yml up -d
 
-      # 9) Smoke Test
+      # 9) Simple Smoke Test using cURL
       - name: Smoke Test with cURL
         run: |
           set -e
@@ -142,13 +145,13 @@ jobs:
           echo "GET all books..."
           curl http://$IP:8800/books
 
-      # 10) Remove ECR images if tests fail
+      # 10) Remove ECR images if test fails
       - name: Remove ECR Images on Failure
         if: failure()
         run: |
           echo "Tests failed. Removing images from ECR..."
-          aws ecr batch-delete-image --repository-name $ECR_REPO_BACKEND --image-ids imageTag=$IMAGE_TAG
-          aws ecr.batch-delete-image --repository-name $ECR_REPO_FRONTEND --image-ids imageTag=$IMAGE_TAG
+          aws ecr batch-delete-image --repository-name $ECR_REPO_BACKEND --image-ids imageTag=$IMAGE_TAG --region $AWS_REGION
+          aws ecr batch-delete-image --repository-name $ECR_REPO_FRONTEND --image-ids imageTag=$IMAGE_TAG --region $AWS_REGION
 
       # 11) Terminate ephemeral EC2
       - name: Terminate EC2
@@ -157,8 +160,7 @@ jobs:
           INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
           if [ -n "$INSTANCE_ID" ]; then
             echo "Terminating EC2 instance $INSTANCE_ID..."
-            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
-            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region $AWS_REGION
+            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID" --region $AWS_REGION
             echo "Instance terminated."
           fi
-
