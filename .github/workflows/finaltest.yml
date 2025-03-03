@@ -356,6 +356,9 @@
 #             aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
 #             echo "Instance terminated."
 #           fi
+
+
+
 name: "test1"
 
 on:
@@ -403,10 +406,10 @@ jobs:
 
           # Wait for instance to be running
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "EC2 is now running. Sleeping 15s to let networking come up..."
+          echo "EC2 is now running. Sleeping 15s..."
           sleep 15
 
-          # Set the instance_id as a step output
+          # Set instance_id as a step output
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
       # 4) Set up SSH Key
@@ -442,7 +445,7 @@ jobs:
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
           echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to install Docker..."
 
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" <<'EOF'
             set -e
             echo "connected"
             sudo yum update -y
@@ -452,8 +455,8 @@ jobs:
 
             # Install Docker Compose
             sudo curl -L \
-              "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-              -o /usr/local/bin/docker-compose
+            "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+            -o /usr/local/bin/docker-compose
             sudo chmod +x /usr/local/bin/docker-compose
 
             echo "Docker version:"
@@ -463,29 +466,32 @@ jobs:
 
             # Create environment files directory for future use
             mkdir -p ~/env_files
-          EOF
+            EOF
 
       # 7) Deploy Application on EC2 (start containers)
       - name: Deploy Application on EC2
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
           echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to deploy application..."
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << EOF
+
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" <<EOF
             set -e
             echo "Cloning source repository..."
             git clone $SOURCE_REPO_URL app
             cd app
             echo "Starting containers using docker-compose.test.yml..."
             docker-compose -f docker-compose.test.yml up -d
-          EOF
+            EOF
 
-      # 8) Check container logs (debug step) - FIXED
+      # 8) Check container logs (debug step) - Proper heredoc
       - name: Check container logs (debug step)
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
           echo "🔍 Fetching Docker logs to see if there's a DB or backend error..."
 
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << EOF
+          # NOTE: No extra indentation before EOF.
+          # The shebang is optional, but let's keep it to ensure Bash is used.
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" <<EOF
             #!/usr/bin/env bash
             set -e
 
