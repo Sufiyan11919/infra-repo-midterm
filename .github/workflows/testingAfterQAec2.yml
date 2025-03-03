@@ -83,12 +83,13 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 5. Read out the private key (using legacy set-output to preserve newlines)
+      # 5. Read out the private key using the new environment file method
       - name: Read EC2 Key
         id: read_key
         run: |
-          key=$(cat ec2-key.pem)
-          echo "::set-output name=private_key::$key"
+          echo "private_key<<EOF" >> $GITHUB_ENV
+          cat ec2-key.pem >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
       # 6. SSH into the EC2 instance: clone repo and run docker-compose.test.yml
       - name: Run Test on Temp EC2
@@ -97,7 +98,7 @@ jobs:
         with:
           host: ${{ steps.launch_ec2.outputs.public_ip }}
           username: ec2-user
-          key: ${{ steps.read_key.outputs.private_key }}
+          key: ${{ env.private_key }}
           script: |
             set -e
             echo "Cloning repo..."
