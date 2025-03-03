@@ -263,11 +263,11 @@ jobs:
             username: ec2-user
             key: ${{ secrets.EC2_SSH_KEY }}
             script: |
-                cd crud-react-node-mySQL-go
+                cd crud-react-node-mySQL-go   
                 echo "Bringing down current deployment..."
                 docker-compose down --rmi all
-                docker system prune -f
+                docker system prune -a
                 echo "Pulling latest images from ECR..."
+                docker-compose pull
                 echo "Starting updated deployment..."
-                docker-compose -f docker-compose.yml up -d --build
-            
+                docker-compose --env-file .env.qa -f docker-compose.yml -f docker-compose.qa.yml up -d --build
