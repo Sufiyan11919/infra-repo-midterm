@@ -21,7 +21,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout source
+      # 1) Checkout Source
       - name: Checkout Source
         uses: actions/checkout@v2
         with:
@@ -66,7 +66,7 @@ jobs:
       - name: Push Frontend
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 6) Launch an EC2 instance (inject AWS credentials in user-data)
+      # 6) Launch an EC2 instance with AWS credentials in user-data
       - name: Launch EC2
         id: launch_ec2
         run: |
@@ -80,6 +80,11 @@ jobs:
           export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
           export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
           export AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+
+          aws configure set aws_access_key_id ${AWS_ACCESS_KEY_ID}
+          aws configure set aws_secret_access_key ${AWS_SECRET_ACCESS_KEY}
+          aws configure set aws_session_token ${AWS_SESSION_TOKEN}
+          aws configure set region us-east-1
 
           aws ecr get-login-password --region us-east-1 \
             | docker login --username AWS \
@@ -119,7 +124,7 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 8) SSH into EC2, pull ECR images, run them
+      # 8) SSH into EC2, set AWS credentials, pull ECR images, run them
       - name: Deploy & Test
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -128,10 +133,11 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            export AWS_REGION="us-east-1"
-            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
-            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
-            export AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN}"
+            echo "Setting AWS credentials..."
+            aws configure set aws_access_key_id "${AWS_ACCESS_KEY_ID}"
+            aws configure set aws_secret_access_key "${AWS_SECRET_ACCESS_KEY}"
+            aws configure set aws_session_token "${AWS_SESSION_TOKEN}"
+            aws configure set region "us-east-1"
 
             echo "Logging into ECR..."
             aws ecr get-login-password --region us-east-1 \
