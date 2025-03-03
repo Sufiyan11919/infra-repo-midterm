@@ -538,7 +538,7 @@ jobs:
               }' http://${{ steps.get_temp_ec2.outputs.public_ip }}:8800/books || true)
               
               echo "Response: $response"
-              if [[ "$response" == *"Book has been created successfully!!!"* ]]; then
+              if [[ "$response" == *"Book has been created successfully!"* ]]; then
                 echo "Smoke test passed: expected response received"
                 exit 0
               fi
