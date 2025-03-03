@@ -29,21 +29,17 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3. Launch an ephemeral EC2 instance (Amazon Linux 2) using a temporary key pair
+      # 3. Launch an ephemeral EC2 instance (Amazon Linux 2) using your pre‑created key pair
       - name: Launch EC2
         id: launch_ec2
         run: |
-          # Create a unique key pair and save the private key (this key is used by EC2)
-          KEY_PAIR_NAME="github-actions-key-$$"
-          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ephemeral-key.pem
-          chmod 400 ephemeral-key.pem
-
-          # Use official Amazon Linux 2 AMI for us-east-1
-          AMI_ID="ami-09e67e426f25ce0d7"
+          # Use your pre-created key pair name (must exist in your AWS account)
+          KEY_PAIR_NAME="my-key"
+          AMI_ID="ami-09e67e426f25ce0d7"  # Official Amazon Linux 2 AMI in us-east-1
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
 
-          # User data: install Docker & Git only
+          # User data: install Docker & Git
           USER_DATA="#!/bin/bash
           yum update -y
           yum install -y docker git
@@ -58,36 +54,34 @@ jobs:
             --user-data "$USER_DATA" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1)
-
+          
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
-
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
-
+          
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
-
+          
           # Set outputs for later steps
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
-          echo "ephemeral_key_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
       # 4. Wait a bit to ensure SSH is ready
       - name: Wait for SSH
         run: sleep 60
 
-      # 5. Write the secret EC2 SSH key from GitHub secrets to a file and set permissions to 400
+      # 5. Write the secret EC2 SSH key to a file and set its permissions to 400
       - name: Write SSH Key from Secret
         run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-secret-key.pem
-          chmod 400 ec2-secret-key.pem
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+          chmod 400 ec2-key.pem
 
       # 6. Connect via SSH using the secret key to run tests on the EC2 instance
       - name: Run Test on Temp EC2 via SSH
         run: |
-          ssh -o StrictHostKeyChecking=no -i ec2-secret-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
             set -e
             echo "Cloning repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
