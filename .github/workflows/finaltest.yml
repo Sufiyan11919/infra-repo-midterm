@@ -101,7 +101,7 @@ jobs:
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
           echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to deploy application..."
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << EOF
             set -e
             echo "Cloning source repository..."
             git clone $SOURCE_REPO_URL app
