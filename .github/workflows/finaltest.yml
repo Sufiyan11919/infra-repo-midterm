@@ -202,11 +202,18 @@ jobs:
           aws ecr get-login-password --region $AWS_REGION \
             | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
+      # 11) Clone Source Repository for Build
+      - name: Clone Source Repository
+        if: success()
+        run: |
+          git clone $SOURCE_REPO_URL source
+          ls -la source
+            
       - name: Build and Push Backend
         if: success()
         run: |
           ls -la
-          cd backend
+          cd source/backend
           docker build -t my-backend-local:latest .
           docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
@@ -215,7 +222,7 @@ jobs:
         if: success()
         run: |
           ls -la
-          cd frontend
+          cd source/frontend
           docker build -t my-frontend-local:latest .
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
