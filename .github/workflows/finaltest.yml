@@ -16,11 +16,11 @@ jobs:
     steps:
       # 1. Checkout the repository
       - name: Checkout Source
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       # 2. Configure AWS Credentials
       - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v2
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -49,98 +49,98 @@ jobs:
           echo "EC2 is now running. Sleeping 15s to let networking come up..."
           sleep 15
 
-      # 4. Wait to ensure SSH is ready and set up SSH Key
-      - name: Set up SSH Key
-        run: |
-            echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
-            chmod 400 ec2-key.pem
+    #   # 4. Wait to ensure SSH is ready and set up SSH Key
+    #   - name: Set up SSH Key
+    #     run: |
+    #         echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+    #         chmod 400 ec2-key.pem
 
-      # 5. Fetch the EC2 Public DNS
-      - name: Fetch Ephemeral EC2 Hostname
-        id: get_temp_ec2
-        run: |
-          PUBLIC_DNS=$(aws ec2 describe-instances \
-            --instance-ids "${{ env.INSTANCE_ID }}" \
-            --query 'Reservations[0].Instances[0].PublicDnsName' \
-            --output text)
-          echo "PUBLIC_DNS=$PUBLIC_DNS" >> $GITHUB_ENV
-          echo "::set-output name=public_dns::$PUBLIC_DNS"
-          echo "Ephemeral EC2 Hostname: $PUBLIC_DNS"
+    #   # 5. Fetch the EC2 Public DNS
+    #   - name: Fetch Ephemeral EC2 Hostname
+    #     id: get_temp_ec2
+    #     run: |
+    #       PUBLIC_DNS=$(aws ec2 describe-instances \
+    #         --instance-ids "${{ env.INSTANCE_ID }}" \
+    #         --query 'Reservations[0].Instances[0].PublicDnsName' \
+    #         --output text)
+    #       echo "PUBLIC_DNS=$PUBLIC_DNS" >> $GITHUB_ENV
+    #       echo "::set-output name=public_dns::$PUBLIC_DNS"
+    #       echo "Ephemeral EC2 Hostname: $PUBLIC_DNS"
 
-      # 6. SSH in to install Docker and perform initial setup
-      - name: Install Docker on Ephemeral EC2
-        run: |
-          TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
-          echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to install Docker..."
+    #   # 6. SSH in to install Docker and perform initial setup
+    #   - name: Install Docker on Ephemeral EC2
+    #     run: |
+    #       TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
+    #       echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to install Docker..."
 
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
-            set -e
-            echo "connected"
-            sudo yum update -y
-            sudo yum install -y docker git jq
-            sudo service docker start
-            sudo usermod -aG docker ec2-user
+    #       ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
+    #         set -e
+    #         echo "connected"
+    #         sudo yum update -y
+    #         sudo yum install -y docker git jq
+    #         sudo service docker start
+    #         sudo usermod -aG docker ec2-user
             
-            # Install Docker Compose
-            sudo curl -L \
-              "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-              -o /usr/local/bin/docker-compose
-            sudo chmod +x /usr/local/bin/docker-compose
+    #         # Install Docker Compose
+    #         sudo curl -L \
+    #           "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+    #           -o /usr/local/bin/docker-compose
+    #         sudo chmod +x /usr/local/bin/docker-compose
             
-            echo "Docker version:"
-            docker --version
-            echo "Docker Compose version:"
-            docker-compose --version
+    #         echo "Docker version:"
+    #         docker --version
+    #         echo "Docker Compose version:"
+    #         docker-compose --version
             
-            # Create environment files directory for future use
-            mkdir -p ~/env_files
-          EOF
+    #         # Create environment files directory for future use
+    #         mkdir -p ~/env_files
+    #       EOF
 
-      # 7. Run smoke tests from the GitHub runner using cURL
-      - name: Smoke Test with cURL
-        run: |
-          set -e
-          IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting 30s for the app to fully initialize..."
-          sleep 30
-          echo "POST a new book..."
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
-            http://$IP:8800/books
-          echo "GET all books..."
-          curl http://$IP:8800/books
+    #   # 7. Run smoke tests from the GitHub runner using cURL
+    #   - name: Smoke Test with cURL
+    #     run: |
+    #       set -e
+    #       IP="${{ steps.launch_ec2.outputs.public_ip }}"
+    #       echo "Waiting 30s for the app to fully initialize..."
+    #       sleep 30
+    #       echo "POST a new book..."
+    #       curl -X POST -H "Content-Type: application/json" \
+    #         -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
+    #         http://$IP:8800/books
+    #       echo "GET all books..."
+    #       curl http://$IP:8800/books
 
-      # 8. Build and Push images to ECR if tests pass
-      - name: Log in to ECR
-        if: success()
-        run: |
-          aws ecr get-login-password --region $AWS_REGION \
-            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+    #   # 8. Build and Push images to ECR if tests pass
+    #   - name: Log in to ECR
+    #     if: success()
+    #     run: |
+    #       aws ecr get-login-password --region $AWS_REGION \
+    #         | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      - name: Build and Push Backend
-        if: success()
-        run: |
-          cd backend
-          docker build -t my-backend-local:latest .
-          docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+    #   - name: Build and Push Backend
+    #     if: success()
+    #     run: |
+    #       cd backend
+    #       docker build -t my-backend-local:latest .
+    #       docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+    #       docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      - name: Build and Push Frontend
-        if: success()
-        run: |
-          cd frontend
-          docker build -t my-frontend-local:latest .
-          docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
-          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+    #   - name: Build and Push Frontend
+    #     if: success()
+    #     run: |
+    #       cd frontend
+    #       docker build -t my-frontend-local:latest .
+    #       docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+    #       docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 9. Terminate the EC2 instance
-      - name: Terminate EC2
-        if: always()
-        run: |
-          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
-          if [ -n "$INSTANCE_ID" ]; then
-            echo "Terminating EC2 instance $INSTANCE_ID..."
-            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
-            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
-            echo "Instance terminated."
-          fi
+    #   # 9. Terminate the EC2 instance
+    #   - name: Terminate EC2
+    #     if: always()
+    #     run: |
+    #       INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
+    #       if [ -n "$INSTANCE_ID" ]; then
+    #         echo "Terminating EC2 instance $INSTANCE_ID..."
+    #         aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+    #         aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+    #         echo "Instance terminated."
+    #       fi
