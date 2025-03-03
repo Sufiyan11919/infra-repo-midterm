@@ -165,7 +165,7 @@ jobs:
       - name: Terminate EC2
         if: always()
         run: |
-          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
+          INSTANCE_ID="${{ env.INSTANCE_ID }}"
           if [ -n "$INSTANCE_ID" ]; then
             echo "Terminating EC2 instance $INSTANCE_ID..."
             aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
