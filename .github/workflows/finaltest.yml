@@ -110,19 +110,26 @@ jobs:
             docker-compose -f docker-compose.test.yml up -d
           EOF
 
-      # 7. Run smoke tests from the GitHub runner using cURL
-      - name: Smoke Test with cURL
-        run: |
-          set -e
-          IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting 30s for the app to fully initialize..."
-          sleep 30
-          echo "POST a new book..."
-          curl -X POST -H "Content-Type: application/json" \
-            -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
-            http://$IP:8800/books
-          echo "GET all books..."
-          curl http://$IP:8800/books
+      # 7. Run smoke tests on EC2 using localhost (container IP)
+      - name: Smoke Test on EC2 (using localhost)
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.launch_ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            echo "Waiting 30s for the app to fully initialize..."
+            sleep 30
+            echo "POST a new book on localhost..."
+            curl -X POST -H "Content-Type: application/json" -d '{
+              "title": "New Book",
+              "description": "This is a test book",
+              "price": 10.99,
+              "cover": "https://example.com/book-cover.jpg"
+            }' http://localhost:8800/books
+            echo "GET all books on localhost..."
+            curl http://localhost:8800/books
 
       # 8. Build and Push images to ECR if tests pass
       - name: Log in to ECR
