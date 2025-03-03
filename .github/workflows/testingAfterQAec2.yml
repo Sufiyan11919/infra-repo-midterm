@@ -17,7 +17,7 @@ jobs:
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout source code (so we can build images if tests pass)
+      # 1. Checkout source code (used later for building images)
       - name: Checkout Source
         uses: actions/checkout@v2
         with:
@@ -26,7 +26,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # 2) Configure AWS Credentials (needed to call EC2 APIs)
+      # 2. Configure AWS Credentials (needed for EC2 API calls)
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
@@ -35,28 +35,28 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Launch ephemeral EC2 (Amazon Linux 2, no ECR login in user data)
+      # 3. Launch an ephemeral EC2 (Amazon Linux 2) without ECR login
       - name: Launch EC2
         id: launch_ec2
         run: |
-          # Create key pair
+          # Create a unique key pair
           KEY_PAIR_NAME="github-actions-key-$$"
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
-
-          # Official Amazon Linux 2 AMI in us-east-1
+          
+          # Use official Amazon Linux 2 AMI (us-east-1)
           AMI_ID="ami-09e67e426f25ce0d7"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
-
-          # user_data installs Docker & Git, but does NOT login to ECR
+          
+          # User data installs Docker & Git only
           USER_DATA="#!/bin/bash
           yum update -y
           yum install -y docker git
           systemctl enable docker
           service docker start
           "
-
+          
           CREATE_OUTPUT=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type "$INSTANCE_TYPE" \
@@ -64,27 +64,27 @@ jobs:
             --user-data "$USER_DATA" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1)
-
+          
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
-
+          
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
-
+          
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
-
-          # Expose outputs to other steps
+          
+          # Set outputs for later steps
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
           echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
 
-      # 4) Wait for SSH
+      # 4. Wait a bit to ensure SSH is ready
       - name: Wait for SSH
         run: sleep 60
 
-      # 5) Read out the private key so we can SSH
+      # 5. Read out the private key (ensure proper multiline formatting)
       - name: Read EC2 Key
         id: read_key
         run: |
@@ -92,7 +92,7 @@ jobs:
           cat ec2-key.pem >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # 6) SSH: Clone repo & run Docker Compose test
+      # 6. SSH into the EC2 to clone the repo and run the test environment
       - name: Run Test on Temp EC2
         uses: appleboy/ssh-action@v0.1.8
         id: test_on_ec2
@@ -105,54 +105,48 @@ jobs:
             echo "Cloning repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
-
             echo "Starting containers via docker-compose.test.yml..."
             docker-compose -f docker-compose.test.yml build
             docker-compose -f docker-compose.test.yml up -d
-
-            echo "Containers started. Checking logs & status..."
+            echo "Containers started. Checking status and logs..."
             docker-compose -f docker-compose.test.yml ps
             docker-compose -f docker-compose.test.yml logs backend
 
-      # 7) Smoke Test from GH runner with cURL
+      # 7. Smoke test (using cURL from the GitHub runner)
       - name: Smoke Test with cURL
         id: smoke_test
         run: |
           set -e
           IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting 30s for app to fully initialize..."
+          echo "Waiting 30s for the app to fully initialize..."
           sleep 30
-
           echo "POST a new book..."
           curl -X POST -H "Content-Type: application/json" \
             -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
             http://$IP:8800/books
-
           echo "GET all books..."
           curl http://$IP:8800/books
 
-      # 8) If tests pass, build images on GH runner and push to ECR
-      - name: Log in to ECR (on GH runner)
+      # 8. If tests pass, build images on the GitHub runner and push them to ECR
+      - name: Log in to ECR
         if: success()
         run: |
           aws ecr get-login-password --region $AWS_REGION \
             | docker login --username AWS \
             --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-      - name: Build Backend (on GH runner)
+      - name: Build Backend (GH Runner)
         if: success()
         run: |
           cd backend
           docker build -t my-backend-local:latest .
-          # Tag for ECR
           docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
 
-      - name: Build Frontend (on GH runner)
+      - name: Build Frontend (GH Runner)
         if: success()
         run: |
           cd frontend
           docker build -t my-frontend-local:latest .
-          # Tag for ECR
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
       - name: Push Backend to ECR
@@ -165,7 +159,7 @@ jobs:
         run: |
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 9) Terminate ephemeral EC2
+      # 9. Terminate the ephemeral EC2 instance and delete the temporary key pair
       - name: Terminate EC2
         if: always()
         run: |
