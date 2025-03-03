@@ -8,7 +8,6 @@ on:
 jobs:
   build-push-test:
     runs-on: ubuntu-latest
-
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
@@ -35,28 +34,28 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3. Launch an ephemeral EC2 (Amazon Linux 2) without ECR login
+      # 3. Launch an ephemeral EC2 instance (Amazon Linux 2) without ECR login
       - name: Launch EC2
         id: launch_ec2
         run: |
-          # Create a unique key pair
+          # Create a unique key pair and save the private key
           KEY_PAIR_NAME="github-actions-key-$$"
           aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
           chmod 400 ec2-key.pem
-          
-          # Use official Amazon Linux 2 AMI (us-east-1)
+
+          # Use official Amazon Linux 2 AMI for us-east-1
           AMI_ID="ami-09e67e426f25ce0d7"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
-          
-          # User data installs Docker & Git only
+
+          # User data: install Docker & Git only
           USER_DATA="#!/bin/bash
           yum update -y
           yum install -y docker git
           systemctl enable docker
           service docker start
           "
-          
+
           CREATE_OUTPUT=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
             --instance-type "$INSTANCE_TYPE" \
@@ -64,17 +63,17 @@ jobs:
             --user-data "$USER_DATA" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1)
-          
+
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
-          
+
           aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
           echo "Instance $INSTANCE_ID is now running."
-          
+
           PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
             --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
           echo "Public IP: $PUBLIC_IP"
-          
+
           # Set outputs for later steps
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
@@ -84,15 +83,14 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 5. Read out the private key (ensure proper multiline formatting)
+      # 5. Read out the private key (using legacy set-output to preserve newlines)
       - name: Read EC2 Key
         id: read_key
         run: |
-          echo "private_key<<EOF" >> $GITHUB_OUTPUT
-          cat ec2-key.pem >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          key=$(cat ec2-key.pem)
+          echo "::set-output name=private_key::$key"
 
-      # 6. SSH into the EC2 to clone the repo and run the test environment
+      # 6. SSH into the EC2 instance: clone repo and run docker-compose.test.yml
       - name: Run Test on Temp EC2
         uses: appleboy/ssh-action@v0.1.8
         id: test_on_ec2
@@ -112,7 +110,7 @@ jobs:
             docker-compose -f docker-compose.test.yml ps
             docker-compose -f docker-compose.test.yml logs backend
 
-      # 7. Smoke test (using cURL from the GitHub runner)
+      # 7. Smoke test from the GitHub runner using cURL
       - name: Smoke Test with cURL
         id: smoke_test
         run: |
