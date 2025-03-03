@@ -20,6 +20,9 @@ jobs:
       # 1) Checkout the repository
       - name: Checkout Source
         uses: actions/checkout@v4
+     
+      - name: List repository contents
+        run: ls -la  
 
       # 2) Configure AWS Credentials
       - name: Configure AWS Credentials
@@ -202,6 +205,7 @@ jobs:
       - name: Build and Push Backend
         if: success()
         run: |
+          ls -la
           cd backend
           docker build -t my-backend-local:latest .
           docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
@@ -210,6 +214,7 @@ jobs:
       - name: Build and Push Frontend
         if: success()
         run: |
+          ls -la
           cd frontend
           docker build -t my-frontend-local:latest .
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
