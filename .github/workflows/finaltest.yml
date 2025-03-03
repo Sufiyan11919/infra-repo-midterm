@@ -270,4 +270,4 @@ jobs:
                 echo "Pulling latest images from ECR..."
                 docker-compose pull
                 echo "Starting updated deployment..."
-                docker-compose --env-file .env.qa -f docker-compose.yml -f docker-compose.qa.yml up -d --build
+                docker-compose --env-file .env.qa -f docker-compose.yml -f docker-compose.qa.yml up -d
