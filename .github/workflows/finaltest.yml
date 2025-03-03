@@ -1,0 +1,144 @@
+name: "Nightly Build & Test"
+
+on:
+  schedule:
+    - cron: "0 0 * * *"  # 12AM UTC
+  workflow_dispatch:
+
+jobs:
+  build-push-test:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: 120717612929
+      ECR_REPO_BACKEND: my-app-backend
+      ECR_REPO_FRONTEND: my-app-frontend
+      IMAGE_TAG: latest
+
+    steps:
+      # 1. Checkout the repository (for later builds)
+      - name: Checkout Source
+        uses: actions/checkout@v2
+
+      # 2. Configure AWS Credentials (for EC2 API calls)
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3. Launch an ephemeral EC2 instance (Amazon Linux 2) using your pre‑created key pair
+      - name: Launch EC2
+        id: launch_ec2
+        run: |
+          # Use your pre-created key pair name (must exist in your AWS account)
+          KEY_PAIR_NAME="${{ secrets.EC2_KEYPAIR_NAME }}"
+          AMI_ID="ami-09e67e426f25ce0d7"  # Official Amazon Linux 2 AMI in us-east-1
+          INSTANCE_TYPE="t2.micro"
+          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
+
+          # User data: install Docker & Git
+          USER_DATA="#!/bin/bash
+          yum update -y
+          yum install -y docker git
+          systemctl enable docker
+          service docker start
+          "
+
+          CREATE_OUTPUT=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "$KEY_PAIR_NAME" \
+            --user-data "$USER_DATA" \
+            --security-group-ids "$SECURITY_GROUP_ID" \
+            --count 1)
+          
+          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
+          echo "Instance ID: $INSTANCE_ID"
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          echo "Instance $INSTANCE_ID is now running."
+          
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          echo "Public IP: $PUBLIC_IP"
+          
+          # Set outputs for later steps
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      # 4. Wait a bit to ensure SSH is ready
+      - name: Wait for SSH
+        run: sleep 60
+
+      # 5. Write the secret EC2 SSH key to a file and set its permissions to 400
+      - name: Write SSH Key from Secret
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+          chmod 400 ec2-key.pem
+
+      # 6. Connect via SSH using the secret key to run tests on the EC2 instance
+      - name: Run Test on Temp EC2 via SSH
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
+            set -e
+            echo "Cloning repo..."
+            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
+            cd app
+            echo "Starting containers via docker-compose.test.yml..."
+            docker-compose -f docker-compose.test.yml build
+            docker-compose -f docker-compose.test.yml up -d
+            echo "Containers started. Checking status and logs..."
+            docker-compose -f docker-compose.test.yml ps
+            docker-compose -f docker-compose.test.yml logs backend
+          EOF
+
+      # 7. Run smoke tests from the GitHub runner using cURL
+      - name: Smoke Test with cURL
+        run: |
+          set -e
+          IP="${{ steps.launch_ec2.outputs.public_ip }}"
+          echo "Waiting 30s for the app to fully initialize..."
+          sleep 30
+          echo "POST a new book..."
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{"title":"Nightly Book","description":"From GitHub Actions","price":10.50,"cover":"https://via.placeholder.com/150"}' \
+            http://$IP:8800/books
+          echo "GET all books..."
+          curl http://$IP:8800/books
+
+      # 8. If tests pass, build images on the GitHub runner and push them to ECR
+      - name: Log in to ECR
+        if: success()
+        run: |
+          aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      - name: Build and Push Backend
+        if: success()
+        run: |
+          cd backend
+          docker build -t my-backend-local:latest .
+          docker tag my-backend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+
+      - name: Build and Push Frontend
+        if: success()
+        run: |
+          cd frontend
+          docker build -t my-frontend-local:latest .
+          docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+          docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+
+      # 9. Terminate the EC2 instance
+      - name: Terminate EC2
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
+          if [ -n "$INSTANCE_ID" ]; then
+            echo "Terminating EC2 instance $INSTANCE_ID..."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+            echo "Instance terminated."
+          fi
