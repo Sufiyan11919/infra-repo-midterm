@@ -130,9 +130,9 @@ jobs:
             
             # Docker login again inside the SSH session
             echo "Logging into ECR on ephemeral EC2..."
-            aws ecr get-login-password --region $AWS_REGION \
+            aws ecr get-login-password --region us-east-1 \
               | docker login --username AWS \
-              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 
             # Pull images from ECR for backend, frontend + MySQL from Docker Hub
             echo "Pulling images from ECR..."
