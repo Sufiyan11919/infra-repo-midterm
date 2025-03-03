@@ -34,7 +34,7 @@ jobs:
         id: launch_ec2
         run: |
           # Use your pre-created key pair name (must exist in your AWS account)
-          KEY_PAIR_NAME="my-key"
+          KEY_PAIR_NAME="${{ secrets.EC2_KEYPAIR_NAME }}"
           AMI_ID="ami-09e67e426f25ce0d7"  # Official Amazon Linux 2 AMI in us-east-1
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
