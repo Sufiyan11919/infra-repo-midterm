@@ -512,7 +512,7 @@ jobs:
             else
             echo "No backend container found."
             fi
-            EOF
+          EOF
 
       # 9) Smoke Test with multiple retries
       - name: Smoke Test on EC2
