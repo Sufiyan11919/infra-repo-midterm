@@ -269,5 +269,5 @@ jobs:
                 docker system prune -f
                 echo "Pulling latest images from ECR..."
                 echo "Starting updated deployment..."
-                docker-compose --env-file .env.qa -f docker-compose.yml up -d --build
+                docker-compose -f docker-compose.yml up -d --build
             
