@@ -465,7 +465,7 @@ jobs:
             mkdir -p ~/env_files
           EOF
 
-      # 7) Deploy Application on EC2
+      # 7) Deploy Application on EC2 (start containers)
       - name: Deploy Application on EC2
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
@@ -478,6 +478,36 @@ jobs:
             echo "Starting containers using docker-compose.test.yml..."
             docker-compose -f docker-compose.test.yml up -d
           EOF
+
+      # -------- NEW STEP HERE: "Check container logs" --------
+      - name: Check container logs (debug step)
+        run: |
+          TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
+          echo "🔍 Fetching Docker logs to see if there's a DB or backend error..."
+
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
+            echo "=== Docker PS ==="
+            docker ps
+
+            echo ""
+            echo "=== MySQL Container Logs ==="
+            MYSQL_CID=\$(docker ps --filter "ancestor=mysql:8" --format "{{.ID}}")
+            if [ -n "\$MYSQL_CID" ]; then
+              docker logs "\$MYSQL_CID" || true
+            else
+              echo "No MySQL container found."
+            fi
+
+            echo ""
+            echo "=== Backend Container Logs ==="
+            BACKEND_CID=\$(docker ps --filter "name=backend" --format "{{.ID}}")
+            if [ -n "\$BACKEND_CID" ]; then
+              docker logs "\$BACKEND_CID" || true
+            else
+              echo "No backend container found."
+            fi
+          EOF
+      # ------------------------------------------------------
 
       # 8) Smoke Test with multiple retries
       - name: Smoke Test on EC2
