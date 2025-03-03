@@ -122,7 +122,7 @@ jobs:
           script: |
             set -e
             echo "Waiting 30s for the app to fully initialize..."
-            sleep 30
+            sleep 60
             echo "Sending POST request to http://$EC2_IP:8800/books..."
             response=$(curl -X POST -H "Content-Type: application/json" -d '{
               "title": "New Book",
