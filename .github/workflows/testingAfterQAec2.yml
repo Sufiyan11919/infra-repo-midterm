@@ -1,0 +1,212 @@
+name: "test-ec2"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-push-test:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: 120717612929
+      ECR_REPO_BACKEND: my-app-backend
+      ECR_REPO_FRONTEND: my-app-frontend
+      IMAGE_TAG: latest
+
+    steps:
+      # 1) Checkout the source repository (which contains backend, frontend, docker-compose.yml)
+      - name: Checkout Source Repository
+        uses: actions/checkout@v2
+        with:
+          repository: Sufiyan11919/crud-react-node-mySQL-go
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      # 2) Configure AWS Credentials (using session token)
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3) Log in to Amazon ECR
+      - name: Log in to Amazon ECR
+        run: |
+          aws ecr get-login-password --region $AWS_REGION \
+          | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+      # 4) Build the Backend Docker image
+      - name: Build Backend Docker Image
+        run: |
+          cd backend
+          docker build -t $ECR_REPO_BACKEND:$IMAGE_TAG .
+          docker tag $ECR_REPO_BACKEND:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+
+      # 5) Build the Frontend Docker image
+      - name: Build Frontend Docker Image
+        run: |
+          cd frontend
+          docker build -t $ECR_REPO_FRONTEND:$IMAGE_TAG .
+          docker tag $ECR_REPO_FRONTEND:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+
+      # 6) Push the Backend image to ECR
+      - name: Push Backend Image to ECR
+        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:$IMAGE_TAG
+
+      # 7) Push the Frontend image to ECR
+      - name: Push Frontend Image to ECR
+        run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
+
+      # 8) Launch a temporary EC2 instance using your custom AMI
+      - name: Launch EC2 instance
+        id: launch_ec2
+        run: |
+          KEY_PAIR_NAME="github-actions-key-$$"
+          aws ec2 create-key-pair --key-name "$KEY_PAIR_NAME" --query "KeyMaterial" --output text > ec2-key.pem
+          chmod 400 ec2-key.pem
+
+          # Use your custom AMI with Docker and Git preinstalled
+          AMI_ID="ami-09940406aa41815f0"
+          INSTANCE_TYPE="t2.micro"
+          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
+
+          USER_DATA="#!/bin/bash
+          aws configure set default.region $AWS_REGION
+          # Log in to ECR (Docker is already installed on this AMI)
+          aws ecr get-login-password --region $AWS_REGION \
+            | docker login --username AWS \
+            --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+          "
+
+          CREATE_OUTPUT=$(aws ec2 run-instances \
+            --image-id "$AMI_ID" \
+            --instance-type "$INSTANCE_TYPE" \
+            --key-name "$KEY_PAIR_NAME" \
+            --user-data "$USER_DATA" \
+            --security-group-ids "$SECURITY_GROUP_ID" \
+            --count 1)
+
+          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
+          echo "Instance ID: $INSTANCE_ID"
+
+          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
+          echo "Instance $INSTANCE_ID is now running."
+
+          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
+            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
+          echo "Public IP: $PUBLIC_IP"
+
+          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "key_pair_name=$KEY_PAIR_NAME" >> $GITHUB_OUTPUT
+
+      # 9) Wait for SSH to be ready (increased wait time)
+      - name: Wait for SSH
+        run: sleep 60
+
+      # 9.5) Debug: List key file and check its size
+      - name: Check EC2 Key File
+        run: |
+          ls -l ec2-key.pem
+          wc -c ec2-key.pem
+
+      # 10) Read the private key content and set as output using heredoc for multiline
+      - name: Read EC2 Private Key
+        id: read_key
+        run: |
+          echo "private_key<<EOF" >> $GITHUB_OUTPUT
+          cat ec2-key.pem >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 11) SSH into the instance and verify installations before deployment
+      - name: Deploy & Start containers
+        id: ssh_deploy
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+          host: ${{ steps.launch_ec2.outputs.public_ip }}
+          username: ec2-user
+          key: ${{ steps.read_key.outputs.private_key }}
+          script: |
+            echo "Verifying Docker and Git installations..."
+            if ! command -v docker &> /dev/null; then
+              echo "Error: Docker is not installed. Exiting..."
+              exit 1
+            fi
+
+            if ! command -v git &> /dev/null; then
+              echo "Error: Git is not installed. Exiting..."
+              exit 1
+            fi
+
+            if ! command -v docker-compose &> /dev/null && ! command -v docker compose &> /dev/null; then
+              echo "Error: Docker Compose is not installed. Exiting..."
+              exit 1
+            fi
+
+            echo "All dependencies are installed. Proceeding with deployment..."
+
+            # Authenticate with ECR again to ensure credentials are present
+            echo "Logging in to Amazon ECR..."
+            aws ecr get-login-password --region $AWS_REGION \
+              | docker login --username AWS \
+              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+
+            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
+            cd app
+
+            # Pull and run images with Docker Compose
+            if command -v docker-compose &> /dev/null; then
+              echo "Using docker-compose command..."
+              sudo docker-compose pull # Ensure images are pulled before running
+              sudo docker-compose up -d
+            else
+              echo "Using docker compose command..."
+              sudo docker compose pull # Ensure images are pulled before running
+              sudo docker compose up -d
+            fi
+
+            sudo docker ps
+
+      # 12) Test the running application
+      - name: Integration Test with cURL
+        id: test_app
+        run: |
+          set -e
+          EC2_IP="${{ steps.launch_ec2.outputs.public_ip }}"
+          echo "Waiting a few more seconds for the app to be up..."
+          sleep 20
+          echo "Adding a test record..."
+          curl -X POST -H "Content-Type: application/json" \
+            -d '{"title":"Test Book","description":"From GitHub Actions","price":9.99,"cover":"https://via.placeholder.com/150"}' \
+            http://$EC2_IP:8800/books
+          echo "Fetching all records..."
+          curl http://$EC2_IP:8800/books
+
+      # 13) Remove ECR images if tests fail
+      - name: Remove ECR images if tests fail
+        if: failure()
+        run: |
+          echo "Tests failed! Removing backend image from ECR..."
+          aws ecr batch-delete-image --repository-name $ECR_REPO_BACKEND --image-ids imageTag=$IMAGE_TAG
+          echo "Removing frontend image from ECR..."
+          aws ecr batch-delete-image --repository-name $ECR_REPO_FRONTEND --image-ids imageTag=$IMAGE_TAG
+
+      # 14) Terminate the EC2 instance and delete the key pair
+      - name: Terminate EC2 instance
+        if: always()
+        run: |
+          INSTANCE_ID="${{ steps.launch_ec2.outputs.instance_id }}"
+          KEY_PAIR_NAME="${{ steps.launch_ec2.outputs.key_pair_name }}"
+          if [ -z "$INSTANCE_ID" ]; then
+            echo "No instance was launched; skipping termination."
+          else
+            echo "Terminating EC2 instance $INSTANCE_ID..."
+            aws ec2 terminate-instances --instance-ids "$INSTANCE_ID"
+            aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
+            echo "EC2 instance terminated."
+          fi
+          echo "Deleting temporary key pair $KEY_PAIR_NAME..."
+          aws ec2 delete-key-pair --key-name "$KEY_PAIR_NAME"
