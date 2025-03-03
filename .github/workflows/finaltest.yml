@@ -479,13 +479,16 @@ jobs:
             docker-compose -f docker-compose.test.yml up -d
           EOF
 
-      # -------- NEW STEP HERE: "Check container logs" --------
+      # 8) Check container logs (debug step) - FIXED
       - name: Check container logs (debug step)
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
           echo "🔍 Fetching Docker logs to see if there's a DB or backend error..."
 
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << EOF
+            #!/usr/bin/env bash
+            set -e
+
             echo "=== Docker PS ==="
             docker ps
 
@@ -493,23 +496,22 @@ jobs:
             echo "=== MySQL Container Logs ==="
             MYSQL_CID=\$(docker ps --filter "ancestor=mysql:8" --format "{{.ID}}")
             if [ -n "\$MYSQL_CID" ]; then
-              docker logs "\$MYSQL_CID" || true
+            docker logs "\$MYSQL_CID" || true
             else
-              echo "No MySQL container found."
+            echo "No MySQL container found."
             fi
 
             echo ""
             echo "=== Backend Container Logs ==="
             BACKEND_CID=\$(docker ps --filter "name=backend" --format "{{.ID}}")
             if [ -n "\$BACKEND_CID" ]; then
-              docker logs "\$BACKEND_CID" || true
+            docker logs "\$BACKEND_CID" || true
             else
-              echo "No backend container found."
+            echo "No backend container found."
             fi
-          EOF
-      # ------------------------------------------------------
+            EOF
 
-      # 8) Smoke Test with multiple retries
+      # 9) Smoke Test with multiple retries
       - name: Smoke Test on EC2
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -545,7 +547,7 @@ jobs:
             echo "Smoke test failed after multiple attempts."
             exit 1
 
-      # 9) Build and Push images to ECR if tests pass
+      # 10) Build and Push images to ECR if tests pass
       - name: Log in to ECR
         if: success()
         run: |
@@ -568,7 +570,7 @@ jobs:
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 10) Terminate the EC2 instance
+      # 11) Terminate the EC2 instance
       - name: Terminate EC2
         if: always()
         run: |
