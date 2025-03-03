@@ -385,7 +385,7 @@ jobs:
           aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Launch an ephemeral EC2 instance
+      # 3) Launch ephemeral EC2
       - name: Launch Temporary EC2 for Build/Test
         id: launch_ec2
         run: |
@@ -406,7 +406,7 @@ jobs:
           echo "EC2 is now running. Sleeping 15s to let networking come up..."
           sleep 15
 
-          # Set the instance_id as a step output so we can use it later
+          # Set the instance_id as a step output
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
 
       # 4) Set up SSH Key
@@ -415,7 +415,7 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
           chmod 400 ec2-key.pem
 
-      # 5) Fetch the EC2 Public DNS and Public IP
+      # 5) Fetch EC2 Public DNS and IP
       - name: Fetch Ephemeral EC2 Hostname
         id: get_temp_ec2
         run: |
@@ -436,7 +436,7 @@ jobs:
           echo "Ephemeral EC2 Hostname (DNS): $PUBLIC_DNS"
           echo "Ephemeral EC2 Public IP: $PUBLIC_IP"
 
-      # 6) SSH in to install Docker and perform initial setup
+      # 6) Install Docker on EC2
       - name: Install Docker on Ephemeral EC2
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
@@ -449,23 +449,23 @@ jobs:
             sudo yum install -y docker git jq
             sudo service docker start
             sudo usermod -aG docker ec2-user
-            
+
             # Install Docker Compose
             sudo curl -L \
               "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
               -o /usr/local/bin/docker-compose
             sudo chmod +x /usr/local/bin/docker-compose
-            
+
             echo "Docker version:"
             docker --version
             echo "Docker Compose version:"
             docker-compose --version
-            
+
             # Create environment files directory for future use
             mkdir -p ~/env_files
           EOF
 
-      # 7) Deploy Application on EC2 (clone & compose up)
+      # 7) Deploy Application on EC2
       - name: Deploy Application on EC2
         run: |
           TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
@@ -479,7 +479,7 @@ jobs:
             docker-compose -f docker-compose.test.yml up -d
           EOF
 
-      # 8) Smoke Test on EC2 (using instance Public IP)
+      # 8) Smoke Test with multiple retries
       - name: Smoke Test on EC2
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -488,21 +488,32 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            echo "Waiting 90s for the app to fully initialize..."
-            sleep 90
-            echo "Sending POST request to http://${{ steps.get_temp_ec2.outputs.public_ip }}:8800/books..."
-            response=$(curl -X POST -H "Content-Type: application/json" -d '{
-              "title": "New Book",
-              "description": "This is a test book",
-              "price": 10.99,
-              "cover": "https://example.com/book-cover.jpg"
-            }' http://${{ steps.get_temp_ec2.outputs.public_ip }}:8800/books)
-            echo "Response: $response"
-            if [[ "$response" != *"Book has been created successfully!!!"* ]]; then
-              echo "Smoke test failed: unexpected response"
-              exit 1
-            fi
-            echo "Smoke test passed: expected response received"
+
+            echo "Sleeping 30s initial buffer..."
+            sleep 30
+
+            echo "Attempting POST /books up to 6 times..."
+            for i in {1..6}; do
+              echo "Try #$i..."
+              response=$(curl -s -X POST -H "Content-Type: application/json" -d '{
+                "title": "New Book",
+                "description": "This is a test book",
+                "price": 10.99,
+                "cover": "https://example.com/book-cover.jpg"
+              }' http://${{ steps.get_temp_ec2.outputs.public_ip }}:8800/books || true)
+              
+              echo "Response: $response"
+              if [[ "$response" == *"Book has been created successfully!!!"* ]]; then
+                echo "Smoke test passed: expected response received"
+                exit 0
+              fi
+
+              echo "Backend not ready or unexpected response. Sleeping 10s..."
+              sleep 10
+            done
+
+            echo "Smoke test failed after multiple attempts."
+            exit 1
 
       # 9) Build and Push images to ECR if tests pass
       - name: Log in to ECR
@@ -527,7 +538,7 @@ jobs:
           docker tag my-frontend-local:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 10) Terminate EC2
+      # 10) Terminate the EC2 instance
       - name: Terminate EC2
         if: always()
         run: |
