@@ -1,4 +1,4 @@
-name: "Nightly Build & Test"
+name: "test1"
 
 on:
   schedule:
@@ -81,7 +81,7 @@ jobs:
       # 6. Connect via SSH using the secret key to run tests on the EC2 instance
       - name: Run Test on Temp EC2 via SSH
         run: |
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
+          ssh -i ec2-key.pem ec2-user@${{ steps.launch_ec2.outputs.public_ip }} << 'EOF'
             set -e
             echo "Cloning repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
