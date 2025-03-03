@@ -1,3 +1,4 @@
+# finally done pushing the images to ECR
 name: "test1"
 
 on:
