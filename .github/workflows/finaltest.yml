@@ -30,77 +30,72 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       # 3. Launch an ephemeral EC2 instance
-      - name: Launch EC2
+      - name: Launch Temporary EC2 for Build/Test
         id: launch_ec2
         run: |
-          KEY_PAIR_NAME="${{ secrets.EC2_KEYPAIR_NAME }}"
-          AMI_ID="ami-09e67e426f25ce0d7"  # Official Amazon Linux 2 AMI in us-east-1
-          INSTANCE_TYPE="t2.micro"
-          SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
+          INSTANCE_ID=$(aws ec2 run-instances \
+            --image-id ami-05b10e08d247fb927 \
+            --count 1 \
+            --instance-type t2.micro \
+            --key-name myKey \
+            --security-group-ids sg-0bb71744d70b0efab \
+            --subnet-id subnet-0e90ef3332a0cd56d \
+            --query 'Instances[0].InstanceId' \
+            --output text)
+          
+          echo "INSTANCE_ID=$INSTANCE_ID" >> $GITHUB_ENV
+          echo "Ephemeral INSTANCE_ID: $INSTANCE_ID"
 
-          USER_DATA="#!/bin/bash
-          yum update -y
-          yum install -y docker git
-          systemctl enable docker
-          service docker start
-          "
-
-          CREATE_OUTPUT=$(aws ec2 run-instances \
-            --image-id "$AMI_ID" \
-            --instance-type "$INSTANCE_TYPE" \
-            --key-name "$KEY_PAIR_NAME" \
-            --user-data "$USER_DATA" \
-            --security-group-ids "$SECURITY_GROUP_ID" \
-            --count 1)
-          
-          INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
-          echo "Instance ID: $INSTANCE_ID"
-          aws ec2 wait instance-running --instance-ids "$INSTANCE_ID"
-          echo "Instance $INSTANCE_ID is now running."
-          
-          PUBLIC_IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" \
-            --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-          echo "Public IP: $PUBLIC_IP"
-          
-          # Set outputs for later steps
-          echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
-          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          # Wait for instance to be running
+          aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+          echo "EC2 is now running. Sleeping 15s to let networking come up..."
+          sleep 15
 
       # 4. Wait to ensure SSH is ready
-      - name: Wait for SSH
-        run: sleep 60
+      - name: Set up SSH Key
+        run: |
+            echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
+            chmod 400 ec2-key.pem
 
       # 5. Fetch the EC2 Public DNS (similar to your friend's workflow)
-      - name: Fetch EC2 Public DNS
-        id: fetch_dns
+      - name: Fetch Ephemeral EC2 Hostname
+        id: get_temp_ec2
         run: |
-          PUBLIC_DNS=$(aws ec2 describe-instances --instance-ids "${{ steps.launch_ec2.outputs.instance_id }}" \
-            --query 'Reservations[0].Instances[0].PublicDnsName' --output text)
+          PUBLIC_DNS=$(aws ec2 describe-instances \
+            --instance-ids "${{ env.INSTANCE_ID }}" \
+            --query 'Reservations[0].Instances[0].PublicDnsName' \
+            --output text)
           echo "PUBLIC_DNS=$PUBLIC_DNS" >> $GITHUB_ENV
           echo "::set-output name=public_dns::$PUBLIC_DNS"
-          echo "EC2 Public DNS: $PUBLIC_DNS"
+          echo "Ephemeral EC2 Hostname: $PUBLIC_DNS"
 
-      # 6. Write the secret EC2 SSH key to a file and set its permissions
-      - name: Write SSH Key from Secret
+      # 6. SSH in install Docker and initial Setup
+      - name: Install Docker on Ephemeral EC2
         run: |
-          echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
-          chmod 400 ec2-key.pem
+          TEMP_HOST="${{ steps.get_temp_ec2.outputs.public_dns }}"
+          echo "🔑 SSHing into ephemeral EC2 at $TEMP_HOST to install Docker..."
 
-      # 7. Connect via SSH using the secret key to run tests on the EC2 instance
-      - name: Run Test on Temp EC2 via SSH
-        run: |
-          echo "Connecting to EC2 at ${{ steps.fetch_dns.outputs.public_dns }}..."
-          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@${{ steps.fetch_dns.outputs.public_dns }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no -i ec2-key.pem ec2-user@"$TEMP_HOST" << 'EOF'
             set -e
-            echo "Cloning repo..."
-            git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
-            cd app
-            echo "Starting containers via docker-compose.test.yml..."
-            docker-compose -f docker-compose.test.yml build
-            docker-compose -f docker-compose.test.yml up -d
-            echo "Containers started. Checking status and logs..."
-            docker-compose -f docker-compose.test.yml ps
-            docker-compose -f docker-compose.test.yml logs backend
+            echo "connected"
+            sudo yum update -y
+            sudo yum install -y docker git jq
+            sudo service docker start
+            sudo usermod -aG docker ec2-user
+            
+            # Install Docker Compose
+            sudo curl -L \
+              "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
+              -o /usr/local/bin/docker-compose
+            sudo chmod +x /usr/local/bin/docker-compose
+            
+            echo "Docker version:"
+            docker --version
+            echo "Docker Compose version:"
+            docker-compose --version
+            
+            # Create environment files directory for future use
+            mkdir -p ~/env_files
           EOF
 
       # 8. Run smoke tests from the GitHub runner using cURL
