@@ -266,8 +266,8 @@ jobs:
                 cd crud-react-node-mySQL-go   
                 echo "Bringing down current deployment..."
                 docker-compose down --rmi all
-                docker system prune -a
+                docker system prune -f
                 echo "Pulling latest images from ECR..."
                 # docker-compose pull
                 echo "Starting updated deployment..."
-                docker-compose --env-file .env.qa -f docker-compose.yml -f docker-compose.qa.yml up -d
+                docker-compose --env-file .env.qa -f docker-compose.yml up -d
