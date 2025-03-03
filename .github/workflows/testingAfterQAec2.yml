@@ -108,7 +108,7 @@ jobs:
       # 8️⃣ SSH into EC2, set AWS credentials, pull ECR images, and run tests
       - name: Deploy & Test
         run: |
-          ssh -i ec2-key.pem -o StrictHostKeyChecking=no ec2-user@${{ env.PUBLIC_IP }} << EOF
+            ssh -i ec2-key.pem -o StrictHostKeyChecking=no ec2-user@${{ env.PUBLIC_IP }} << EOF
             set -e
 
             echo "Setting AWS credentials..."
@@ -116,9 +116,10 @@ jobs:
             export AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
             export AWS_SESSION_TOKEN=${{ secrets.AWS_SESSION_TOKEN }}
             export AWS_REGION="us-east-1"
+            export AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}  # ✅ Ensure AWS_ACCOUNT_ID is available
 
             echo "Logging into AWS ECR..."
-            aws ecr get-login-password --region \$AWS_REGION | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.\$AWS_REGION.amazonaws.com
+            aws ecr get-login-password --region \$AWS_REGION | docker login --username AWS --password-stdin \$AWS_ACCOUNT_ID.dkr.ecr.\$AWS_REGION.amazonaws.com
 
             echo "Cloning the application repo..."
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
@@ -138,10 +139,10 @@ jobs:
 
             curl -o /dev/null -s -w "%{http_code}\n" http://localhost:8800/ | grep -q 200 || exit 1
             echo "✅ Test completed successfully for backend root!"
-          
+            
             curl -o /dev/null -s -w "%{http_code}\n" http://localhost:8800/books | grep -q 200 || exit 1
             echo "✅ Test completed successfully for fetching books!"
-          EOF
+            EOF
 
       # 9️⃣ Remove ECR images if test fails
       - name: Remove ECR Images on Failure
