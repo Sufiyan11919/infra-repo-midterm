@@ -210,7 +210,7 @@ jobs:
           git clone $SOURCE_REPO_URL source
           ls -la source
             
-            # 12) Build and Push Backend
+        # 12) Build and Push Backend
       - name: Build and Push Backend
         if: success()
         run: |
@@ -227,7 +227,7 @@ jobs:
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_BACKEND:backend-$TIMESTAMP
 
 
-            # 13) Build and Push Frontend
+        # 13) Build and Push Frontend
       - name: Build and Push Frontend
         if: success()
         run: |
@@ -243,7 +243,7 @@ jobs:
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
           docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:frontend-$TIMESTAMP
 
-      # 11) Terminate the EC2 instance
+      # 14) Terminate the EC2 instance
       - name: Terminate EC2
         if: always()
         run: |
@@ -254,3 +254,20 @@ jobs:
             aws ec2 wait instance-terminated --instance-ids "$INSTANCE_ID"
             echo "Instance terminated."
           fi
+        
+     # 15) Update QA Deployment on QA-EC2 (pull latest images and restart)
+      - name: Update QA Deployment on QA-EC2
+        uses: appleboy/ssh-action@v0.1.8
+        with:
+            host: ${{ secrets.QA_EC2_IP }}
+            username: ec2-user
+            key: ${{ secrets.EC2_SSH_KEY }}
+            script: |
+                cd crud-react-node-mySQL-go   
+                echo "Bringing down current deployment..."
+                docker-compose down --rmi all
+                docker system prune -a
+                echo "Pulling latest images from ECR..."
+                docker-compose pull
+                echo "Starting updated deployment..."
+                docker-compose --env-file .env.qa -f docker-compose.yml -f docker-compose.qa.yml up -d --build
