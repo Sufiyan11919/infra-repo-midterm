@@ -2,22 +2,31 @@ name: "Nightly Build & Test"
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # runs nightly at midnight UTC
+    - cron: "0 0 * * *"  # Runs nightly at midnight UTC
   workflow_dispatch:
 
 jobs:
   build-push-test:
     runs-on: ubuntu-latest
-    
+
+    # Make sure your AWS credentials are set in environment variables here
+    # (We also set AWS keys from GitHub secrets)
     env:
       AWS_REGION: us-east-1
       AWS_ACCOUNT_ID: 120717612929
+      
+      # The next three lines assume you have these secrets in GitHub:
+      # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
+
       ECR_REPO_BACKEND: my-app-backend
       ECR_REPO_FRONTEND: my-app-frontend
       IMAGE_TAG: latest
 
     steps:
-      # 1) Checkout your application code (repo has Dockerfiles, docker-compose.test.yml, etc.)
+      # 1) Checkout your application code (Dockerfiles, docker-compose.test.yml, etc.)
       - name: Checkout Source
         uses: actions/checkout@v2
         with:
@@ -26,16 +35,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      # 2) Configure AWS Credentials (for ECR and EC2)
+      # 2) Configure AWS Credentials on the GitHub Actions runner
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # 3) Log in to Amazon ECR (to push images)
+      # 3) Log in to Amazon ECR (to push newly built images)
       - name: Log in to Amazon ECR
         run: |
           aws ecr get-login-password --region $AWS_REGION \
@@ -62,14 +71,26 @@ jobs:
       - name: Push Frontend
         run: docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO_FRONTEND:$IMAGE_TAG
 
-      # 6) Launch an EC2 instance using the existing key pair "myTempKeyPair"
+      # 6) Launch an EC2 instance (key pair "myTempKeyPair"), injecting AWS creds in user data
       - name: Launch EC2
         id: launch_ec2
         run: |
           AMI_ID="ami-09940406aa41815f0"
           INSTANCE_TYPE="t2.micro"
           SECURITY_GROUP_ID="sg-0bb71744d70b0efab"
-          KEY_PAIR_NAME="myTempKeyPair"  # The name you used when importing your public key to AWS
+          KEY_PAIR_NAME="myTempKeyPair"
+
+          USER_DATA="#!/bin/bash
+          export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+          export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+          export AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}
+          export AWS_REGION=${AWS_REGION}
+
+          # Log in to ECR right away on instance boot:
+          aws ecr get-login-password --region \$AWS_REGION \
+            | docker login --username AWS \
+            --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.\$AWS_REGION.amazonaws.com
+          "
 
           CREATE_OUTPUT=$(aws ec2 run-instances \
             --image-id "$AMI_ID" \
@@ -77,7 +98,8 @@ jobs:
             --key-name "$KEY_PAIR_NAME" \
             --security-group-ids "$SECURITY_GROUP_ID" \
             --count 1 \
-            --region $AWS_REGION)
+            --region $AWS_REGION \
+            --user-data "$USER_DATA")
 
           INSTANCE_ID=$(echo "$CREATE_OUTPUT" | jq -r '.Instances[0].InstanceId')
           echo "Instance ID: $INSTANCE_ID"
@@ -94,7 +116,7 @@ jobs:
           echo "instance_id=$INSTANCE_ID" >> $GITHUB_OUTPUT
           echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
 
-      # 7) Write the private key from GitHub Secrets to ec2-key.pem
+      # 7) Write the SSH private key from GitHub Secrets to ec2-key.pem
       - name: Setup SSH Key
         run: |
           echo "${{ secrets.EC2_SSH_KEY }}" > ec2-key.pem
@@ -103,7 +125,7 @@ jobs:
       - name: Wait for SSH
         run: sleep 60
 
-      # 8) SSH into the ephemeral EC2, pull images from ECR, run them
+      # 8) SSH into the ephemeral EC2, clone the repo, pull images from ECR, run them
       - name: Deploy & Test
         uses: appleboy/ssh-action@v0.1.8
         with:
@@ -113,15 +135,15 @@ jobs:
             ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            # Clone your repo to get docker-compose.test.yml (which references the ECR images + a MySQL container)
+            # Clone your repo to get docker-compose.test.yml
             git clone https://github.com/Sufiyan11919/crud-react-node-mySQL-go.git app
             cd app
 
-            # Docker login again on ephemeral EC2 (so we can pull from ECR)
+            # If you didn't log in to ECR in user data, do it here:
             echo "Logging into ECR on ephemeral EC2..."
-            aws ecr get-login-password --region us-east-1 \
+            aws ecr get-login-password --region $AWS_REGION \
               | docker login --username AWS \
-              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+              --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
             echo "Pulling images from ECR..."
             docker-compose -f docker-compose.test.yml pull
@@ -134,7 +156,7 @@ jobs:
         run: |
           set -e
           IP="${{ steps.launch_ec2.outputs.public_ip }}"
-          echo "Waiting 20s for containers to start..."
+          echo "Waiting 20s for containers to come up..."
           sleep 20
 
           echo "POST a new book..."
@@ -145,7 +167,7 @@ jobs:
           echo "GET all books..."
           curl http://$IP:8800/books
 
-      # 10) Remove ECR images if test fails
+      # 10) Remove ECR images if tests fail
       - name: Remove ECR Images on Failure
         if: failure()
         run: |
