@@ -216,7 +216,7 @@ jobs:
         run: |
           # Generate timestamp tag (YYYYMMDDHHMMSS)
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          echo "TIMESTAMP tag: \$TIMESTAMP"
+          echo "TIMESTAMP tag: $TIMESTAMP"
           ls -la
           cd source/backend
           docker build -t my-backend-local:latest .
@@ -232,7 +232,7 @@ jobs:
         run: |
           # Generate timestamp tag (YYYYMMDDHHMMSS)
           TIMESTAMP=$(date +%Y%m%d%H%M%S)
-          echo "TIMESTAMP tag: \$TIMESTAMP"
+          echo "TIMESTAMP tag: $TIMESTAMP"
           ls -la
           cd source/frontend
           docker build -t my-frontend-local:latest .
