@@ -2,8 +2,8 @@
 name: "test1"
 
 on:
-  schedule:
-    - cron: "0 0 * * *"  # 12AM UTC
+  #schedule:
+    #- cron: "0 0 * * *"  # 12AM UTC
   workflow_dispatch:
 
 jobs:
